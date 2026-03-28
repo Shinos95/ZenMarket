@@ -10,257 +10,386 @@ import com.zenmarket.util.FormatUtils;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
-import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.JTableHeader;
 import javax.swing.table.TableColumnModel;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
+import java.awt.event.*;
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
- * Finestra principale dell'applicazione.
- * Coordina UI, servizi e aggiornamenti della tabella.
+ * Finestra principale — dark theme, layout responsivo, multi-selezione,
+ * auto-save alla chiusura e al riavvio.
  */
 public class MainFrame extends JFrame {
 
+    // ─── Servizi ───────────────────────────────────────────────────────────
     private final CalcolatoreService calcolatore = new CalcolatoreService();
-    private final SessioneService sessione = new SessioneService();
+    private final SessioneService    sessione    = new SessioneService();
 
+    // ─── Tabella ──────────────────────────────────────────────────────────
     private final ArticoloTableModel tableModel = new ArticoloTableModel();
-    private final JTable tabella = new JTable(tableModel);
+    private final JTable             tabella    = new JTable(tableModel);
+
+    // ─── Componenti UI principali ─────────────────────────────────────────
     private final SummaryPanel summaryPanel = new SummaryPanel();
+    private final JLabel       lblStatus    = new JLabel(" ");
+    private final JLabel       lblAutoSave  = new JLabel();
 
-    // Cambio JPY → EUR
-    private final SpinnerNumberModel cambiModel =
-            new SpinnerNumberModel(AppConfig.DEFAULT_CAMBIO_JPY_EUR, 0.001, 1.0, 0.0001);
-    private final JSpinner spinCambio = new JSpinner(cambiModel);
+    // ─── Cambio JPY → EUR ─────────────────────────────────────────────────
+    private final SpinnerNumberModel cambioModel =
+            new SpinnerNumberModel(AppConfig.DEFAULT_CAMBIO_JPY_EUR, 0.0001, 1.0, 0.0001);
+    private final JSpinner spinCambio = new JSpinner(cambioModel);
 
-    // Label info tariffa corrente
-    private final JLabel lblTariffaInfo = new JLabel();
+    // ─── Pulsanti toolbar ─────────────────────────────────────────────────
+    private JButton btnModifica;
+    private JButton btnRimuovi;
+
+    // ─────────────────────────────────────────────────────────────────────
 
     public MainFrame() {
         super("Calcolatore Zenmarket × Mercari");
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(1200, 700));
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
         buildUI();
-        sessione.caricaEsempi();
+        configuraTabella();
+        buildMenu();
+        registraChiusura();
+
+        // Carica auto-save o esempi
+        boolean daAutoSave = sessione.caricaAutoSaveOEsempi();
         ricalcola();
-        pack();
+        if (daAutoSave) {
+            setStatus("Sessione ripristinata (" + sessione.size() + " articoli)", Theme.GREEN);
+        } else {
+            setStatus("Benvenuto! Dati di esempio caricati.", Theme.ACCENT2);
+        }
+        lblAutoSave.setText("Auto-save: " + sessione.getAutoSavePath());
+
+        setExtendedState(JFrame.MAXIMIZED_BOTH);
+        setMinimumSize(new Dimension(1100, 650));
         setLocationRelativeTo(null);
     }
 
     // ─── Costruzione UI ────────────────────────────────────────────────────
 
     private void buildUI() {
-        JPanel root = new JPanel(new BorderLayout(0, 10));
-        root.setBorder(new EmptyBorder(14, 16, 14, 16));
+        JPanel root = new JPanel(new BorderLayout(0, 0));
+        root.setBackground(Theme.BG);
 
-        root.add(buildToolbar(), BorderLayout.NORTH);
+        root.add(buildHeader(), BorderLayout.NORTH);
         root.add(buildCenter(), BorderLayout.CENTER);
-        root.add(buildFooter(), BorderLayout.SOUTH);
+        root.add(buildStatusBar(), BorderLayout.SOUTH);
 
+        getContentPane().setBackground(Theme.BG);
         setContentPane(root);
-        buildMenu();
-        configuraTabella();
     }
 
-    private JPanel buildToolbar() {
-        JPanel panel = new JPanel(new BorderLayout(10, 0));
+    // ── Header ────────────────────────────────────────────────────────────
 
-        // Titolo
-        JLabel titolo = new JLabel("Calcolatore Zenmarket × Mercari");
-        titolo.setFont(titolo.getFont().deriveFont(Font.BOLD, 18f));
-        panel.add(titolo, BorderLayout.WEST);
+    private JPanel buildHeader() {
+        JPanel header = new JPanel(new BorderLayout(16, 0));
+        header.setBackground(Theme.SURFACE2);
+        header.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.BORDER),
+            new EmptyBorder(12, 20, 12, 20)
+        ));
 
-        // Cambio + pulsanti
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        // Titolo + sottotitolo
+        JPanel titleBlock = new JPanel(new BorderLayout(0, 2));
+        titleBlock.setOpaque(false);
 
-        // Cambio JPY
-        right.add(new JLabel("¥ → € :"));
-        JSpinner.NumberEditor editor = new JSpinner.NumberEditor(spinCambio, "0.00000");
-        spinCambio.setEditor(editor);
-        spinCambio.setPreferredSize(new Dimension(100, 26));
+        JLabel lblTag = new JLabel("CALCOLATORE ACQUISTI JP");
+        lblTag.setFont(Theme.FONT_SMALL.deriveFont(Font.BOLD, 9f));
+        lblTag.setForeground(Theme.ACCENT);
+        lblTag.setBorder(new EmptyBorder(0, 0, 2, 0));
+
+        JLabel lblTitolo = new JLabel("Zenmarket × Mercari");
+        lblTitolo.setFont(Theme.FONT_TITLE.deriveFont(22f));
+        lblTitolo.setForeground(Theme.TEXT);
+
+        titleBlock.add(lblTag,    BorderLayout.NORTH);
+        titleBlock.add(lblTitolo, BorderLayout.CENTER);
+        header.add(titleBlock, BorderLayout.WEST);
+
+        // Destra: cambio + pulsanti
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        right.setOpaque(false);
+
+        // Spinner cambio
+        JPanel cambioBox = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        cambioBox.setOpaque(false);
+        cambioBox.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(Theme.ACCENT2, 1),
+            new EmptyBorder(4, 10, 4, 10)
+        ));
+        JLabel lblCambio = new JLabel("¥ → €");
+        lblCambio.setFont(Theme.FONT_SMALL.deriveFont(Font.BOLD));
+        lblCambio.setForeground(Theme.ACCENT2);
+        spinCambio.setEditor(new JSpinner.NumberEditor(spinCambio, "0.00000"));
+        spinCambio.setPreferredSize(new Dimension(110, 26));
+        spinCambio.setBackground(Theme.SURFACE2);
+        spinCambio.setForeground(Theme.ACCENT2);
+        ((JSpinner.NumberEditor) spinCambio.getEditor()).getTextField()
+            .setFont(Theme.FONT_TABLE.deriveFont(Font.BOLD, 14f));
+        ((JSpinner.NumberEditor) spinCambio.getEditor()).getTextField()
+            .setForeground(Theme.ACCENT2);
         spinCambio.addChangeListener(e -> ricalcola());
-        right.add(spinCambio);
-
-        lblTariffaInfo.setFont(lblTariffaInfo.getFont().deriveFont(Font.ITALIC, 11f));
-        lblTariffaInfo.setForeground(new Color(120, 120, 150));
-        right.add(lblTariffaInfo);
+        cambioBox.add(lblCambio);
+        cambioBox.add(spinCambio);
 
         // Pulsanti azione
-        JButton btnAggiungi = toolbar_btn("+ Aggiungi", new Color(60, 140, 60));
+        JButton btnAggiungi = Theme.accentButton("＋  Aggiungi", Theme.ACCENT);
         btnAggiungi.addActionListener(e -> apriDialogAggiungi());
+        btnAggiungi.setToolTipText("Aggiungi un nuovo articolo (Ins)");
 
-        JButton btnModifica = toolbar_btn("✎ Modifica", new Color(70, 130, 180));
+        btnModifica = Theme.accentButton("✎  Modifica", new Color(0x4488cc));
         btnModifica.addActionListener(e -> modificaSelezionato());
+        btnModifica.setEnabled(false);
+        btnModifica.setToolTipText("Modifica articolo selezionato (F2 o doppio click)");
 
-        JButton btnRimuovi = toolbar_btn("✕ Rimuovi", new Color(200, 60, 60));
-        btnRimuovi.addActionListener(e -> rimuoviSelezionato());
+        btnRimuovi = Theme.accentButton("✕  Rimuovi", Theme.RED);
+        btnRimuovi.addActionListener(e -> rimuoviSelezionati());
+        btnRimuovi.setEnabled(false);
+        btnRimuovi.setToolTipText("Rimuovi articolo/i selezionati (Canc)");
 
-        JButton btnEsempi = toolbar_btn("⟳ Esempi", new Color(120, 80, 160));
-        btnEsempi.addActionListener(e -> {
-            int r = JOptionPane.showConfirmDialog(this,
-                    "Sostituire gli articoli attuali con i dati di esempio?",
-                    "Carica esempi", JOptionPane.YES_NO_OPTION);
-            if (r == JOptionPane.YES_OPTION) {
-                sessione.caricaEsempi();
-                ricalcola();
-            }
-        });
-
-        right.add(Box.createHorizontalStrut(10));
+        right.add(cambioBox);
+        right.add(Box.createHorizontalStrut(6));
         right.add(btnAggiungi);
         right.add(btnModifica);
         right.add(btnRimuovi);
-        right.add(Box.createHorizontalStrut(4));
-        right.add(btnEsempi);
 
-        panel.add(right, BorderLayout.EAST);
-
-        JPanel wrapper = new JPanel(new BorderLayout());
-        wrapper.add(panel, BorderLayout.CENTER);
-        wrapper.add(new JSeparator(), BorderLayout.SOUTH);
-        wrapper.setBorder(new EmptyBorder(0, 0, 10, 0));
-        return wrapper;
+        header.add(right, BorderLayout.EAST);
+        return header;
     }
 
-    private JButton toolbar_btn(String text, Color bg) {
-        JButton b = new JButton(text);
-        b.setBackground(bg);
-        b.setForeground(Color.WHITE);
-        b.setFocusPainted(false);
-        return b;
-    }
+    // ── Centro: summary + tabella + legenda ───────────────────────────────
 
     private JPanel buildCenter() {
-        JPanel panel = new JPanel(new BorderLayout(0, 10));
-        panel.add(summaryPanel, BorderLayout.NORTH);
+        JPanel panel = new JPanel(new BorderLayout(0, 0));
+        panel.setBackground(Theme.BG);
+        panel.setBorder(new EmptyBorder(16, 20, 0, 20));
+
+        panel.add(summaryPanel,     BorderLayout.NORTH);
+        panel.add(buildTablePanel(), BorderLayout.CENTER);
+        panel.add(buildLegenda(),   BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel buildTablePanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBackground(Theme.SURFACE);
+        panel.setBorder(BorderFactory.createLineBorder(Theme.BORDER, 1));
+
+        // Intestazione tabella
+        JPanel tHeader = new JPanel(new BorderLayout());
+        tHeader.setBackground(Theme.SURFACE2);
+        tHeader.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.BORDER),
+            new EmptyBorder(8, 16, 8, 16)
+        ));
+        JLabel lblTable = new JLabel("Articoli");
+        lblTable.setFont(Theme.FONT_TABLE.deriveFont(Font.BOLD, 13f));
+        lblTable.setForeground(Theme.TEXT);
+        tHeader.add(lblTable, BorderLayout.WEST);
+
+        JLabel hint = new JLabel("Ctrl+Click = multi-selezione  |  Shift+Click = range  |  F2 = modifica  |  Canc = rimuovi");
+        hint.setFont(Theme.FONT_SMALL);
+        hint.setForeground(Theme.MUTED);
+        tHeader.add(hint, BorderLayout.EAST);
+
+        panel.add(tHeader, BorderLayout.NORTH);
 
         JScrollPane scroll = new JScrollPane(tabella);
-        scroll.setBorder(BorderFactory.createLineBorder(new Color(200, 200, 210)));
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.getViewport().setBackground(Theme.SURFACE);
+        scroll.getVerticalScrollBar().setBackground(Theme.SURFACE2);
+        scroll.getHorizontalScrollBar().setBackground(Theme.SURFACE2);
         panel.add(scroll, BorderLayout.CENTER);
-
-        // Legenda
-        panel.add(buildLegenda(), BorderLayout.SOUTH);
         return panel;
     }
 
     private JPanel buildLegenda() {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 16, 4));
-        p.setBorder(BorderFactory.createTitledBorder("Note"));
-        p.setBackground(new Color(248, 248, 252));
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 20, 6));
+        p.setBackground(Theme.SURFACE2);
+        p.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.BORDER),
+            new EmptyBorder(4, 16, 4, 16)
+        ));
 
         String[] voci = {
-            "⚠ Base Dogana — Se supera €150 potrebbero applicarsi dazi doganali",
-            "⚠ N/D Spedizione — Peso < 200g: contattare ZenMarket",
-            "Tariffa Mercari privati: 800 ¥/art. | Standard: 500 ¥/art. | ZenPlus: 300 ¥/art.",
-            "Deposito fondi (carta/PayPal): 3,5% | Bonifico SWIFT: ~4.500 ¥"
+            "⚠ Base Dogana > €150 → possibili dazi doganali",
+            "⚠ Spedizione N/D → peso < 200g, contattare ZenMarket",
+            "Mercari privati: 800¥  |  Standard: 500¥  |  ZenPlus: 300¥",
+            "Deposito: 3,5% (carta/PayPal)  |  SWIFT: ~4.500¥"
         };
         for (String v : voci) {
             JLabel l = new JLabel(v);
-            l.setFont(l.getFont().deriveFont(10f));
-            l.setForeground(new Color(90, 90, 110));
+            l.setFont(Theme.FONT_SMALL);
+            l.setForeground(Theme.MUTED);
             p.add(l);
         }
         return p;
     }
 
-    private JPanel buildFooter() {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JLabel lbl = new JLabel("Doppio click su una riga per modificarla  |  Dati fonte: zenmarket.jp/it/fees.aspx");
-        lbl.setFont(lbl.getFont().deriveFont(10f));
-        lbl.setForeground(Color.GRAY);
-        p.add(lbl);
-        return p;
+    private JPanel buildStatusBar() {
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setBackground(new Color(0x0d0d14));
+        bar.setBorder(new EmptyBorder(4, 20, 4, 20));
+
+        lblStatus.setFont(Theme.FONT_SMALL);
+        lblStatus.setForeground(Theme.MUTED);
+        bar.add(lblStatus, BorderLayout.WEST);
+
+        lblAutoSave.setFont(Theme.FONT_SMALL.deriveFont(9f));
+        lblAutoSave.setForeground(new Color(0x44445a));
+        bar.add(lblAutoSave, BorderLayout.EAST);
+        return bar;
     }
+
+    // ─── Menu ──────────────────────────────────────────────────────────────
 
     private void buildMenu() {
         JMenuBar mb = new JMenuBar();
+        mb.setBackground(Theme.SURFACE2);
+        mb.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.BORDER));
 
         JMenu mFile = new JMenu("File");
-        JMenuItem mNuova = new JMenuItem("Nuova sessione");
-        mNuova.addActionListener(e -> nuovaSessione());
-        JMenuItem mApri = new JMenuItem("Apri…");
-        mApri.addActionListener(e -> apriFile());
-        JMenuItem mSalva = new JMenuItem("Salva…");
-        mSalva.addActionListener(e -> salvaFile());
-        JMenuItem mEsci = new JMenuItem("Esci");
-        mEsci.addActionListener(e -> System.exit(0));
-        mFile.add(mNuova); mFile.add(mApri); mFile.add(mSalva);
-        mFile.addSeparator(); mFile.add(mEsci);
+        addMenuItem(mFile, "Nuova sessione",   "Ctrl+N",  e -> nuovaSessione());
+        addMenuItem(mFile, "Apri…",            "Ctrl+O",  e -> apriFile());
+        addMenuItem(mFile, "Salva…",           "Ctrl+S",  e -> salvaFile());
+        mFile.addSeparator();
+        addMenuItem(mFile, "Esci",             null,      e -> chiudiApp());
+
+        JMenu mModifica = new JMenu("Modifica");
+        addMenuItem(mModifica, "Aggiungi articolo",    "Ins",    e -> apriDialogAggiungi());
+        addMenuItem(mModifica, "Modifica selezionato", "F2",     e -> modificaSelezionato());
+        addMenuItem(mModifica, "Rimuovi selezionati",  "Canc",   e -> rimuoviSelezionati());
+        mModifica.addSeparator();
+        addMenuItem(mModifica, "Carica esempi", null, e -> caricaEsempi());
 
         JMenu mAiuto = new JMenu("Aiuto");
-        JMenuItem mInfo = new JMenuItem("Tariffe ZenMarket");
-        mInfo.addActionListener(e -> mostraInfoTariffe());
-        mAiuto.add(mInfo);
+        addMenuItem(mAiuto, "Tariffe ZenMarket", null, e -> mostraInfoTariffe());
 
-        mb.add(mFile); mb.add(mAiuto);
+        mb.add(mFile);
+        mb.add(mModifica);
+        mb.add(mAiuto);
         setJMenuBar(mb);
+
+        // Scorciatoie globali
+        getRootPane().registerKeyboardAction(e -> apriDialogAggiungi(),
+            KeyStroke.getKeyStroke(KeyEvent.VK_INSERT, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        getRootPane().registerKeyboardAction(e -> modificaSelezionato(),
+            KeyStroke.getKeyStroke(KeyEvent.VK_F2, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        getRootPane().registerKeyboardAction(e -> rimuoviSelezionati(),
+            KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
     }
+
+    private void addMenuItem(JMenu menu, String text, String shortcut, ActionListener action) {
+        JMenuItem item = new JMenuItem(text);
+        if (shortcut != null) {
+            item.setAccelerator(KeyStroke.getKeyStroke(shortcut.replace("Ctrl+", "control ").replace("Ins", "INSERT").replace("F2", "F2").replace("Canc", "DELETE")));
+        }
+        item.addActionListener(action);
+        menu.add(item);
+    }
+
+    // ─── Tabella ──────────────────────────────────────────────────────────
 
     private void configuraTabella() {
-        tabella.setRowHeight(24);
-        tabella.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
-        tabella.getTableHeader().setReorderingAllowed(false);
-        tabella.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        // Multi-selezione con Ctrl e Shift
+        tabella.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        tabella.setBackground(Theme.SURFACE);
+        tabella.setForeground(Theme.TEXT);
+        tabella.setGridColor(Theme.GRID_COLOR);
+        tabella.setRowHeight(30);
         tabella.setShowGrid(true);
-        tabella.setGridColor(new Color(220, 220, 230));
+        tabella.setIntercellSpacing(new Dimension(0, 1));
+        tabella.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
+        tabella.getTableHeader().setReorderingAllowed(false);
+        tabella.setFillsViewportHeight(true);
 
-        // Doppio click → modifica
+        // Header dark
+        JTableHeader header = tabella.getTableHeader();
+        header.setBackground(Theme.SURFACE2);
+        header.setForeground(Theme.MUTED);
+        header.setFont(Theme.FONT_HEADER);
+        header.setPreferredSize(new Dimension(0, 32));
+        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.BORDER));
+
+        // Renderer colori dark
+        tabella.setDefaultRenderer(Object.class, new DarkTableRenderer());
+        tabella.setDefaultRenderer(Integer.class, new DarkTableRenderer());
+
+        // Larghezze colonne proporzionali
+        impostaLarghezzeColonne();
+
+        // Double-click → modifica
         tabella.addMouseListener(new MouseAdapter() {
             @Override public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) modificaSelezionato();
+                if (e.getClickCount() == 2 && tabella.getSelectedRowCount() == 1) {
+                    modificaSelezionato();
+                }
             }
         });
 
-        // Larghezze colonne
-        int[] widths = { 160, 160, 40, 80, 80, 70, 80, 85, 85, 75, 90, 95, 95, 90, 75 };
-        TableColumnModel cm = tabella.getColumnModel();
-        for (int i = 0; i < Math.min(widths.length, cm.getColumnCount()); i++) {
-            cm.getColumn(i).setPreferredWidth(widths[i]);
-        }
+        // Aggiorna pulsanti in base alla selezione
+        tabella.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) aggiornaStatoPulsanti();
+        });
 
-        // Renderer colori
-        tabella.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
-            @Override
-            public Component getTableCellRendererComponent(JTable table, Object value,
-                    boolean isSelected, boolean hasFocus, int row, int col) {
-                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, col);
-                if (!isSelected) {
-                    c.setBackground(row % 2 == 0 ? Color.WHITE : new Color(247, 247, 252));
-                    String txt = value != null ? value.toString() : "";
-                    ArticoloTableModel.Colonna colName = ArticoloTableModel.Colonna.values()[col];
-                    switch (colName) {
-                        case COSTO_ACQ, IVA -> c.setForeground(new Color(180, 60, 40));
-                        case TOT_COSTI     -> { c.setForeground(new Color(180, 60, 40)); setFont(getFont().deriveFont(Font.BOLD)); }
-                        case NETTO_VENDITA -> c.setForeground(new Color(160, 120, 0));
-                        case GUADAGNO      -> {
-                            if (txt.startsWith("+")) c.setForeground(new Color(0, 140, 80));
-                            else if (txt.startsWith("-")) c.setForeground(new Color(200, 40, 40));
-                            else c.setForeground(UIManager.getColor("Table.foreground"));
-                            setFont(getFont().deriveFont(Font.BOLD));
-                        }
-                        case BASE_DOGANA   -> {
-                            if (txt.contains("⚠")) c.setForeground(new Color(200, 100, 0));
-                            else c.setForeground(new Color(100, 100, 150));
-                        }
-                        case SPEDIZIONE    -> {
-                            if (txt.contains("N/D")) c.setForeground(new Color(200, 40, 40));
-                            else c.setForeground(UIManager.getColor("Table.foreground"));
-                        }
-                        default -> c.setForeground(UIManager.getColor("Table.foreground"));
-                    }
-                }
-                ((JLabel) c).setHorizontalAlignment(
-                    col <= 1 ? SwingConstants.LEFT : SwingConstants.RIGHT);
-                return c;
+        // Context menu tasto destro
+        tabella.addMouseListener(new MouseAdapter() {
+            @Override public void mouseReleased(MouseEvent e) {
+                if (e.isPopupTrigger()) mostraContextMenu(e);
+            }
+            @Override public void mousePressed(MouseEvent e) {
+                if (e.isPopupTrigger()) mostraContextMenu(e);
             }
         });
     }
 
-    // ─── Logica di calcolo ─────────────────────────────────────────────────
+    private void impostaLarghezzeColonne() {
+        // Larghezze minime preferite; AUTO_RESIZE_LAST_COLUMN gestirà il resto
+        int[] widths = { 180, 150, 42, 75, 82, 72, 82, 88, 88, 72, 95, 98, 98, 95, 80 };
+        TableColumnModel cm = tabella.getColumnModel();
+        for (int i = 0; i < Math.min(widths.length, cm.getColumnCount()); i++) {
+            cm.getColumn(i).setMinWidth(widths[i]);
+            cm.getColumn(i).setPreferredWidth(widths[i]);
+        }
+    }
+
+    private void mostraContextMenu(MouseEvent e) {
+        int row = tabella.rowAtPoint(e.getPoint());
+        if (row >= 0 && !tabella.isRowSelected(row)) {
+            tabella.setRowSelectionInterval(row, row);
+        }
+        JPopupMenu menu = new JPopupMenu();
+        menu.setBackground(Theme.SURFACE2);
+
+        JMenuItem mAgg = new JMenuItem("＋ Aggiungi nuovo");
+        mAgg.addActionListener(x -> apriDialogAggiungi());
+        menu.add(mAgg);
+        menu.addSeparator();
+
+        if (tabella.getSelectedRowCount() == 1) {
+            JMenuItem mMod = new JMenuItem("✎ Modifica");
+            mMod.addActionListener(x -> modificaSelezionato());
+            menu.add(mMod);
+        }
+
+        JMenuItem mDel = new JMenuItem("✕ Rimuovi selezionati (" + tabella.getSelectedRowCount() + ")");
+        mDel.setForeground(Theme.RED);
+        mDel.addActionListener(x -> rimuoviSelezionati());
+        menu.add(mDel);
+
+        menu.show(tabella, e.getX(), e.getY());
+    }
+
+    // ─── Calcolo ──────────────────────────────────────────────────────────
 
     private void ricalcola() {
         double cambio = (double) spinCambio.getValue();
@@ -269,22 +398,28 @@ public class MainFrame extends JFrame {
             risultati.add(calcolatore.calcola(a, cambio));
         }
         tableModel.setRighe(risultati);
-
         if (!risultati.isEmpty()) {
-            TotaliSessione totali = calcolatore.calcolaTotali(risultati);
-            summaryPanel.aggiorna(totali);
+            summaryPanel.aggiorna(calcolatore.calcolaTotali(risultati));
         } else {
             summaryPanel.reset();
         }
-
-        // Aggiorna info cambio
-        double zenMercari = AppConfig.ZENMARKET_FEE_MERCARI_JPY * cambio;
-        lblTariffaInfo.setText(String.format(" (800¥ = %s | 500¥ = %s)",
-                FormatUtils.eur(zenMercari),
-                FormatUtils.eur(AppConfig.ZENMARKET_FEE_STANDARD_JPY * cambio)));
+        aggiornaStatoPulsanti();
+        // Auto-save ad ogni modifica
+        sessione.autoSalva();
     }
 
-    // ─── Azioni UI ─────────────────────────────────────────────────────────
+    private void aggiornaStatoPulsanti() {
+        int sel = tabella.getSelectedRowCount();
+        btnModifica.setEnabled(sel == 1);
+        btnRimuovi.setEnabled(sel > 0);
+        if (sel > 1) {
+            btnRimuovi.setText("✕  Rimuovi (" + sel + ")");
+        } else {
+            btnRimuovi.setText("✕  Rimuovi");
+        }
+    }
+
+    // ─── Azioni ───────────────────────────────────────────────────────────
 
     private void apriDialogAggiungi() {
         ArticoloDialog dialog = new ArticoloDialog(this, "Aggiungi articolo", null);
@@ -292,15 +427,16 @@ public class MainFrame extends JFrame {
         if (dialog.isConfermato()) {
             sessione.aggiungi(dialog.getArticolo());
             ricalcola();
+            int lastRow = tabella.getRowCount() - 1;
+            tabella.setRowSelectionInterval(lastRow, lastRow);
+            tabella.scrollRectToVisible(tabella.getCellRect(lastRow, 0, true));
+            setStatus("Articolo aggiunto: " + dialog.getArticolo().getNome(), Theme.GREEN);
         }
     }
 
     private void modificaSelezionato() {
         int idx = tabella.getSelectedRow();
-        if (idx < 0) {
-            JOptionPane.showMessageDialog(this, "Seleziona una riga da modificare.", "Nessuna selezione", JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
+        if (idx < 0) return;
         Articolo corrente = sessione.get(idx);
         ArticoloDialog dialog = new ArticoloDialog(this, "Modifica articolo", corrente);
         dialog.setVisible(true);
@@ -308,18 +444,25 @@ public class MainFrame extends JFrame {
             sessione.aggiorna(idx, dialog.getArticolo());
             ricalcola();
             tabella.setRowSelectionInterval(idx, idx);
+            setStatus("Articolo aggiornato: " + dialog.getArticolo().getNome(), Theme.ACCENT2);
         }
     }
 
-    private void rimuoviSelezionato() {
-        int idx = tabella.getSelectedRow();
-        if (idx < 0) return;
-        String nome = sessione.get(idx).getNome();
-        int r = JOptionPane.showConfirmDialog(this,
-                "Rimuovere \"" + nome + "\"?", "Conferma rimozione", JOptionPane.YES_NO_OPTION);
+    private void rimuoviSelezionati() {
+        int[] selectedRows = tabella.getSelectedRows();
+        if (selectedRows.length == 0) return;
+
+        String msg = selectedRows.length == 1
+            ? "Rimuovere \"" + sessione.get(selectedRows[0]).getNome() + "\"?"
+            : "Rimuovere " + selectedRows.length + " articoli selezionati?";
+
+        int r = JOptionPane.showConfirmDialog(this, msg, "Conferma rimozione",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (r == JOptionPane.YES_OPTION) {
-            sessione.rimuovi(idx);
+            List<Integer> indici = Arrays.stream(selectedRows).boxed().collect(Collectors.toList());
+            sessione.rimuoviIndici(indici);
             ricalcola();
+            setStatus(selectedRows.length + " articol" + (selectedRows.length == 1 ? "o rimosso" : "i rimossi"), Theme.RED);
         }
     }
 
@@ -330,6 +473,18 @@ public class MainFrame extends JFrame {
         if (r == JOptionPane.YES_OPTION) {
             sessione.svuota();
             ricalcola();
+            setStatus("Nuova sessione avviata.", Theme.MUTED);
+        }
+    }
+
+    private void caricaEsempi() {
+        int r = JOptionPane.showConfirmDialog(this,
+                "Sostituire gli articoli attuali con i dati di esempio?",
+                "Carica esempi", JOptionPane.YES_NO_OPTION);
+        if (r == JOptionPane.YES_OPTION) {
+            sessione.caricaEsempi();
+            ricalcola();
+            setStatus("Dati di esempio caricati.", Theme.ACCENT2);
         }
     }
 
@@ -340,6 +495,7 @@ public class MainFrame extends JFrame {
             try {
                 sessione.carica(fc.getSelectedFile());
                 ricalcola();
+                setStatus("File caricato: " + fc.getSelectedFile().getName(), Theme.GREEN);
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(this, "Errore apertura file:\n" + ex.getMessage(),
                         "Errore", JOptionPane.ERROR_MESSAGE);
@@ -356,7 +512,7 @@ public class MainFrame extends JFrame {
             if (!f.getName().endsWith(".json")) f = new File(f.getAbsolutePath() + ".json");
             try {
                 sessione.salva(f);
-                JOptionPane.showMessageDialog(this, "Sessione salvata in:\n" + f.getAbsolutePath());
+                setStatus("Sessione salvata: " + f.getName(), Theme.GREEN);
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(this, "Errore salvataggio:\n" + ex.getMessage(),
                         "Errore", JOptionPane.ERROR_MESSAGE);
@@ -366,29 +522,59 @@ public class MainFrame extends JFrame {
 
     private void mostraInfoTariffe() {
         String msg = """
-                TARIFFE ZENMARKET (aggiornate 2025)
+                TARIFFE ZENMARKET (2025)
                 ────────────────────────────────────────
-                Mercari (venditori privati): 800 ¥/articolo
-                Mercari Shops / Amazon JP / Rakuten: 500 ¥/articolo
-                ZenPlus / Negozi consigliati: 300 ¥/articolo
-                
+                Mercari (venditori privati)      800 ¥ / articolo
+                Mercari Shops / Amazon JP / Rakuten  500 ¥ / articolo
+                ZenPlus / Negozi partner         300 ¥ / articolo
+
                 COMMISSIONE DEPOSITO FONDI
                 ────────────────────────────────────────
-                Carta di credito / PayPal: 3,5%
-                Bonifico bancario SWIFT: ~4.500 ¥
-                
+                Carta di credito / PayPal        3,5%
+                Bonifico bancario SWIFT          ~4.500 ¥
+
                 STOCCAGGIO
                 ────────────────────────────────────────
-                60 giorni GRATUITI
-                Oltre: 50 ¥/giorno per articolo
-                
+                Primi 60 giorni                  GRATUITO
+                Oltre il 60° giorno              50 ¥ / giorno per articolo
+
                 SOGLIA DOGANALE ITALIA
                 ────────────────────────────────────────
-                > €150 → possibili dazi doganali
-                
+                Valore dichiarato > €150  →  possibili dazi doganali
+                                                                 
                 Fonte: zenmarket.jp/it/fees.aspx
                 """;
-        JOptionPane.showMessageDialog(this, msg, "Info Tariffe ZenMarket",
-                JOptionPane.INFORMATION_MESSAGE);
+        JOptionPane.showMessageDialog(this, msg, "Info Tariffe ZenMarket", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    // ─── Chiusura ─────────────────────────────────────────────────────────
+
+    private void registraChiusura() {
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                chiudiApp();
+            }
+        });
+    }
+
+    private void chiudiApp() {
+        sessione.autoSalva();
+        dispose();
+        System.exit(0);
+    }
+
+    // ─── Utility ──────────────────────────────────────────────────────────
+
+    private void setStatus(String msg, Color color) {
+        lblStatus.setText(msg);
+        lblStatus.setForeground(color);
+        // Torna a muted dopo 4 secondi
+        Timer t = new Timer(4000, e -> {
+            lblStatus.setText(" ");
+            lblStatus.setForeground(Theme.MUTED);
+        });
+        t.setRepeats(false);
+        t.start();
     }
 }

@@ -12,12 +12,24 @@ import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.logging.Logger;
 
 /**
- * Gestisce la lista di articoli della sessione corrente
- * e il salvataggio/caricamento su file JSON.
+ * Gestisce la lista di articoli della sessione corrente,
+ * il salvataggio/caricamento su file JSON manuale,
+ * e il salvataggio automatico (auto-save) alla chiusura.
+ *
+ * AUTO-SAVE: i dati vengono salvati automaticamente in
+ *   {user.home}/.zenmarket/autosave.json
+ * e ricaricati al prossimo avvio. Se il file non esiste,
+ * vengono caricati i dati di esempio.
  */
 public class SessioneService {
+
+    private static final Logger LOG = Logger.getLogger(SessioneService.class.getName());
+
+    private static final Path AUTO_SAVE_DIR  = Path.of(System.getProperty("user.home"), ".zenmarket");
+    private static final Path AUTO_SAVE_FILE = AUTO_SAVE_DIR.resolve("autosave.json");
 
     private final List<Articolo> articoli = new ArrayList<>();
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -26,6 +38,13 @@ public class SessioneService {
 
     public void aggiungi(Articolo articolo) {
         articoli.add(articolo);
+    }
+
+    /** Rimuove più articoli per indice in una sola operazione */
+    public void rimuoviIndici(List<Integer> indici) {
+        indici.stream()
+              .sorted(Collections.reverseOrder())
+              .forEach(i -> { if (i >= 0 && i < articoli.size()) articoli.remove((int) i); });
     }
 
     public void rimuovi(int indice) {
@@ -46,23 +65,57 @@ public class SessioneService {
         }
     }
 
-    public Articolo get(int indice) {
-        return articoli.get(indice);
-    }
+    public Articolo get(int indice) { return articoli.get(indice); }
 
-    public List<Articolo> getArticoli() {
-        return Collections.unmodifiableList(articoli);
-    }
+    public List<Articolo> getArticoli() { return Collections.unmodifiableList(articoli); }
 
     public int size() { return articoli.size(); }
 
     public void svuota() { articoli.clear(); }
 
-    // ─── Persistenza JSON ──────────────────────────────────────────────────
+    // ─── Auto-save ─────────────────────────────────────────────────────────
+
+    /**
+     * Salva automaticamente la sessione in ~/.zenmarket/autosave.json.
+     * Chiamato alla chiusura dell'app e dopo ogni modifica.
+     */
+    public void autoSalva() {
+        try {
+            Files.createDirectories(AUTO_SAVE_DIR);
+            Files.writeString(AUTO_SAVE_FILE, gson.toJson(articoli), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOG.warning("Auto-save fallito: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Carica l'auto-save se esiste, altrimenti carica i dati di esempio.
+     * @return true se è stato caricato l'auto-save
+     */
+    public boolean caricaAutoSaveOEsempi() {
+        if (Files.exists(AUTO_SAVE_FILE)) {
+            try {
+                String json = Files.readString(AUTO_SAVE_FILE, StandardCharsets.UTF_8);
+                Type listType = new TypeToken<List<Articolo>>(){}.getType();
+                List<Articolo> caricati = gson.fromJson(json, listType);
+                articoli.clear();
+                if (caricati != null) articoli.addAll(caricati);
+                LOG.info("Auto-save caricato: " + articoli.size() + " articoli da " + AUTO_SAVE_FILE);
+                return true;
+            } catch (IOException e) {
+                LOG.warning("Lettura auto-save fallita, carico esempi: " + e.getMessage());
+            }
+        }
+        caricaEsempi();
+        return false;
+    }
+
+    public String getAutoSavePath() { return AUTO_SAVE_FILE.toString(); }
+
+    // ─── Persistenza JSON manuale ──────────────────────────────────────────
 
     public void salva(File file) throws IOException {
-        String json = gson.toJson(articoli);
-        Files.writeString(file.toPath(), json, StandardCharsets.UTF_8);
+        Files.writeString(file.toPath(), gson.toJson(articoli), StandardCharsets.UTF_8);
     }
 
     public void carica(File file) throws IOException {
@@ -70,12 +123,10 @@ public class SessioneService {
         Type listType = new TypeToken<List<Articolo>>(){}.getType();
         List<Articolo> caricati = gson.fromJson(json, listType);
         articoli.clear();
-        if (caricati != null) {
-            articoli.addAll(caricati);
-        }
+        if (caricati != null) articoli.addAll(caricati);
     }
 
-    // ─── Dati di esempio (pre-caricati dal file Excel) ─────────────────────
+    // ─── Dati di esempio ───────────────────────────────────────────────────
 
     public void caricaEsempi() {
         articoli.clear();
