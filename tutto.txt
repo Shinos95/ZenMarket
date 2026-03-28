@@ -1,0 +1,1767 @@
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\Main.java ===
+package com.zenmarket;
+
+import com.formdev.flatlaf.FlatDarkLaf;
+import com.zenmarket.ui.MainFrame;
+
+import javax.swing.*;
+
+/**
+ * Entry point dell'applicazione.
+ */
+public class Main {
+
+    public static void main(String[] args) {
+        // Imposta FlatLaf Dark come Look & Feel moderno
+        // Se non è disponibile, usa il L&F di sistema come fallback
+        try {
+            FlatDarkLaf.setup();
+        } catch (Exception e) {
+            try {
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            } catch (Exception ignored) {}
+        }
+
+        // Avvia la UI nel thread Event Dispatch di Swing
+        SwingUtilities.invokeLater(() -> {
+            MainFrame frame = new MainFrame();
+            frame.setVisible(true);
+        });
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\config\AppConfig.java ===
+package com.zenmarket.config;
+
+/**
+ * Configurazione centralizzata dell'applicazione.
+ * Modifica qui tutte le costanti senza toccare la logica di calcolo.
+ *
+ * Fonti: https://zenmarket.jp/it/fees.aspx  |  https://zenmarket.jp/it/payment.aspx
+ */
+public final class AppConfig {
+
+    private AppConfig() {}
+
+    // ─────────────────────────────────────────────
+    //  TASSO DI CAMBIO DEFAULT
+    // ─────────────────────────────────────────────
+    /** Tasso di cambio JPY → EUR di default. Modificabile dall'utente a runtime. */
+    public static final double DEFAULT_CAMBIO_JPY_EUR = 0.006;
+
+    // ─────────────────────────────────────────────
+    //  TARIFFE DI SERVIZIO ZENMARKET (in JPY)
+    //  Fonte: https://zenmarket.jp/it/fees.aspx
+    // ─────────────────────────────────────────────
+    /** Commissione per acquisti Mercari (venditori privati) – dal 1° ottobre 2025 */
+    public static final int ZENMARKET_FEE_MERCARI_JPY = 800;
+
+    /** Commissione per Mercari Shops, Amazon JP, Rakuten, JDirectItems Auction e la maggior parte degli altri */
+    public static final int ZENMARKET_FEE_STANDARD_JPY = 500;
+
+    /** Commissione per negozi consigliati (ZenPlus, store partner) */
+    public static final int ZENMARKET_FEE_SCONTATA_JPY = 300;
+
+    // ─────────────────────────────────────────────
+    //  COMMISSIONE DEPOSITO FONDI
+    //  Fonte: https://zenmarket.jp/it/payment.aspx
+    //  "commissione fissa del 3,5% per tutti i metodi tranne bonifico bancario"
+    // ─────────────────────────────────────────────
+    /** Commissione applicata al deposito di fondi (carta / PayPal) */
+    public static final double COMMISSIONE_DEPOSITO = 0.035;
+
+    /** Commissione bonifico bancario internazionale (SWIFT) in JPY – alternativa al 3,5% */
+    public static final int COMMISSIONE_BONIFICO_JPY = 4500;
+
+    // ─────────────────────────────────────────────
+    //  IVA ITALIANA SU ACQUISTO
+    // ─────────────────────────────────────────────
+    /** IVA italiana applicata sul costo di acquisto (22%) */
+    public static final double IVA_ITALIANA = 0.22;
+
+    // ─────────────────────────────────────────────
+    //  SOGLIA DOGANALE ITALIA (€)
+    //  Pacchi con valore dichiarato > 150 € sono soggetti a dazi
+    // ─────────────────────────────────────────────
+    public static final double SOGLIA_DOGANALE_EUR = 150.0;
+
+    // ─────────────────────────────────────────────
+    //  TARIFFE EMS SPEDIZIONE INTERNAZIONALE (€)
+    //  Tabella per fascia di peso (grammi) verso Italia
+    //  Modifica i valori se le tariffe cambiano
+    // ─────────────────────────────────────────────
+    /** Ogni fascia: {peso_max_grammi, tariffa_eur} */
+    public static final double[][] TARIFFE_EMS = {
+        //  peso_max(g)   tariffa(€)
+        {    499,          10.30 },
+        {    699,          12.50 },
+        {    899,          14.70 },
+        {    999,          15.20 },
+        {   1199,          18.00 },
+        {   1399,          20.00 },
+        {   1699,          23.50 },
+        {   1999,          26.00 },
+        {   2999,          22.50 },
+        {   3999,          26.00 },
+        {   5999,          33.50 },
+        {   7999,          41.00 },
+    };
+
+    /** Peso minimo (g) per la spedizione EMS */
+    public static final int PESO_MINIMO_EMS_G = 200;
+
+    // ─────────────────────────────────────────────
+    //  STOCCAGGIO OLTRE I 60 GIORNI GRATUITI
+    //  Fonte: https://zenmarket.jp/it/fees.aspx
+    // ─────────────────────────────────────────────
+    public static final int GIORNI_STOCCAGGIO_GRATUITI = 60;
+    public static final int COSTO_STOCCAGGIO_GIORNALIERO_JPY = 50;
+
+    // ─────────────────────────────────────────────
+    //  SERVIZI OPZIONALI (JPY)
+    // ─────────────────────────────────────────────
+    public static final int SERVIZIO_FOTO_PER_ARTICOLO_JPY = 500;
+    public static final int PENALE_CANCELLAZIONE_JPY       = 1000;
+    public static final int REIMBALLAGGIO_BASE_JPY         = 1000;
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\model\Articolo.java ===
+package com.zenmarket.model;
+
+/**
+ * Rappresenta un articolo acquistato tramite ZenMarket.
+ * Contiene solo i dati grezzi inseriti dall'utente.
+ * Tutti i calcoli derivati sono in {@link com.zenmarket.service.CalcolatoreService}.
+ */
+public class Articolo {
+
+    private String nome;
+    private Marketplace marketplace;
+    private int quantita;           // numero di pezzi identici nello stesso ordine
+    private double pesoTotaleGrammi;
+    private double costoAcquistoEur; // prezzo pagato al venditore (già convertito in €)
+    private double nettoVenditaEur;  // prezzo a cui si prevede di rivendere in Italia (0 = non specificato)
+    private int giorniStoccaggio;    // giorni oltre i 60 gratuiti (default 0)
+    private boolean fotoRichiesta;   // se hai richiesto il servizio foto articolo
+    private String note;
+
+    // ─── Costruttori ───────────────────────────────────────────────────────
+
+    public Articolo() {
+        this.marketplace = Marketplace.MERCARI_PRIVATI;
+        this.quantita = 1;
+        this.giorniStoccaggio = 0;
+        this.fotoRichiesta = false;
+    }
+
+    public Articolo(String nome, Marketplace marketplace, int quantita,
+                    double pesoTotaleGrammi, double costoAcquistoEur, double nettoVenditaEur) {
+        this();
+        this.nome = nome;
+        this.marketplace = marketplace;
+        this.quantita = quantita;
+        this.pesoTotaleGrammi = pesoTotaleGrammi;
+        this.costoAcquistoEur = costoAcquistoEur;
+        this.nettoVenditaEur = nettoVenditaEur;
+    }
+
+    // ─── Getters & Setters ─────────────────────────────────────────────────
+
+    public String getNome() { return nome; }
+    public void setNome(String nome) { this.nome = nome; }
+
+    public Marketplace getMarketplace() { return marketplace; }
+    public void setMarketplace(Marketplace marketplace) { this.marketplace = marketplace; }
+
+    public int getQuantita() { return quantita; }
+    public void setQuantita(int quantita) { this.quantita = Math.max(1, quantita); }
+
+    public double getPesoTotaleGrammi() { return pesoTotaleGrammi; }
+    public void setPesoTotaleGrammi(double pesoTotaleGrammi) { this.pesoTotaleGrammi = pesoTotaleGrammi; }
+
+    public double getCostoAcquistoEur() { return costoAcquistoEur; }
+    public void setCostoAcquistoEur(double costoAcquistoEur) { this.costoAcquistoEur = costoAcquistoEur; }
+
+    public double getNettoVenditaEur() { return nettoVenditaEur; }
+    public void setNettoVenditaEur(double nettoVenditaEur) { this.nettoVenditaEur = nettoVenditaEur; }
+
+    public int getGiorniStoccaggio() { return giorniStoccaggio; }
+    public void setGiorniStoccaggio(int giorniStoccaggio) { this.giorniStoccaggio = Math.max(0, giorniStoccaggio); }
+
+    public boolean isFotoRichiesta() { return fotoRichiesta; }
+    public void setFotoRichiesta(boolean fotoRichiesta) { this.fotoRichiesta = fotoRichiesta; }
+
+    public String getNote() { return note; }
+    public void setNote(String note) { this.note = note; }
+
+    @Override
+    public String toString() {
+        return nome != null ? nome : "(articolo senza nome)";
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\model\Marketplace.java ===
+package com.zenmarket.model;
+
+import com.zenmarket.config.AppConfig;
+
+/**
+ * Marketplace supportati con la relativa tariffa di servizio ZenMarket.
+ * Fonte: https://zenmarket.jp/it/fees.aspx
+ */
+public enum Marketplace {
+
+    MERCARI_PRIVATI("Mercari (venditori privati)", AppConfig.ZENMARKET_FEE_MERCARI_JPY),
+    MERCARI_SHOPS("Mercari Shops", AppConfig.ZENMARKET_FEE_STANDARD_JPY),
+    YAHOO_AUCTIONS("Yahoo! Auctions", AppConfig.ZENMARKET_FEE_STANDARD_JPY),
+    AMAZON_JP("Amazon Japan", AppConfig.ZENMARKET_FEE_STANDARD_JPY),
+    RAKUTEN("Rakuten", AppConfig.ZENMARKET_FEE_STANDARD_JPY),
+    RAKUMA("Rakuma", AppConfig.ZENMARKET_FEE_STANDARD_JPY),
+    ZENPLUS("ZenPlus (store partner)", AppConfig.ZENMARKET_FEE_SCONTATA_JPY),
+    ALTRO("Altro negozio", AppConfig.ZENMARKET_FEE_STANDARD_JPY);
+
+    private final String label;
+    private final int tariffaJpy;
+
+    Marketplace(String label, int tariffaJpy) {
+        this.label = label;
+        this.tariffaJpy = tariffaJpy;
+    }
+
+    public String getLabel() { return label; }
+
+    /** Commissione di servizio ZenMarket in JPY per questo marketplace */
+    public int getTariffaJpy() { return tariffaJpy; }
+
+    @Override
+    public String toString() { return label; }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\model\RisultatoCalcolo.java ===
+package com.zenmarket.model;
+
+/**
+ * Risultato immutabile di un calcolo per un singolo {@link Articolo}.
+ * Non contiene logica: è solo un contenitore di valori calcolati.
+ */
+public final class RisultatoCalcolo {
+
+    // Input snapshot
+    private final Articolo articolo;
+    private final double cambioJpyEur;
+
+    // Costi calcolati (tutti in EUR)
+    private final double ivaEur;
+    private final double tariffaZenmarketEur;   // tariffa servizio per articolo × quantità
+    private final double commissioneDepositoEur; // 3,5% sul totale depositato
+    private final double spedizioneStimataEur;   // EMS per fascia di peso, -1 se sotto peso minimo
+    private final double stoccaggioEur;          // solo se giorni > 60
+    private final double fotoEur;                // solo se richiesta
+    private final double totaleCostiEur;
+
+    // Valori doganali
+    private final double baseDoganaEur;   // costo acq + IVA + spedizione (soglia 150€)
+    private final boolean superaSogliaDogana;
+
+    // Profitto
+    private final double guadagnoNettoEur;   // nettoVendita - totaleCosti (0 se vendita non specificata)
+    private final double costoPerPezzoEur;   // totaleCosti / quantità
+
+    // Avvisi
+    private final boolean pesoSottoMinimo;   // true se peso < 200g (spedizione non calcolabile)
+
+    public RisultatoCalcolo(Builder b) {
+        this.articolo = b.articolo;
+        this.cambioJpyEur = b.cambioJpyEur;
+        this.ivaEur = b.ivaEur;
+        this.tariffaZenmarketEur = b.tariffaZenmarketEur;
+        this.commissioneDepositoEur = b.commissioneDepositoEur;
+        this.spedizioneStimataEur = b.spedizioneStimataEur;
+        this.stoccaggioEur = b.stoccaggioEur;
+        this.fotoEur = b.fotoEur;
+        this.totaleCostiEur = b.totaleCostiEur;
+        this.baseDoganaEur = b.baseDoganaEur;
+        this.superaSogliaDogana = b.superaSogliaDogana;
+        this.guadagnoNettoEur = b.guadagnoNettoEur;
+        this.costoPerPezzoEur = b.costoPerPezzoEur;
+        this.pesoSottoMinimo = b.pesoSottoMinimo;
+    }
+
+    // ─── Getters ───────────────────────────────────────────────────────────
+
+    public Articolo getArticolo()              { return articolo; }
+    public double getCambioJpyEur()            { return cambioJpyEur; }
+    public double getIvaEur()                  { return ivaEur; }
+    public double getTariffaZenmarketEur()     { return tariffaZenmarketEur; }
+    public double getCommissioneDepositoEur()  { return commissioneDepositoEur; }
+    public double getSpedizioneStimataEur()    { return spedizioneStimataEur; }
+    public double getStoccaggioEur()           { return stoccaggioEur; }
+    public double getFotoEur()                 { return fotoEur; }
+    public double getTotaleCostiEur()          { return totaleCostiEur; }
+    public double getBaseDoganaEur()           { return baseDoganaEur; }
+    public boolean isSuperaSogliaDogana()      { return superaSogliaDogana; }
+    public double getGuadagnoNettoEur()        { return guadagnoNettoEur; }
+    public double getCostoPerPezzoEur()        { return costoPerPezzoEur; }
+    public boolean isPesoSottoMinimo()         { return pesoSottoMinimo; }
+
+    public boolean hasVendita() {
+        return articolo.getNettoVenditaEur() > 0;
+    }
+
+    // ─── Builder ───────────────────────────────────────────────────────────
+
+    public static final class Builder {
+        private Articolo articolo;
+        private double cambioJpyEur;
+        private double ivaEur;
+        private double tariffaZenmarketEur;
+        private double commissioneDepositoEur;
+        private double spedizioneStimataEur;
+        private double stoccaggioEur;
+        private double fotoEur;
+        private double totaleCostiEur;
+        private double baseDoganaEur;
+        private boolean superaSogliaDogana;
+        private double guadagnoNettoEur;
+        private double costoPerPezzoEur;
+        private boolean pesoSottoMinimo;
+
+        public Builder articolo(Articolo a)                   { this.articolo = a; return this; }
+        public Builder cambioJpyEur(double v)                 { this.cambioJpyEur = v; return this; }
+        public Builder ivaEur(double v)                       { this.ivaEur = v; return this; }
+        public Builder tariffaZenmarketEur(double v)          { this.tariffaZenmarketEur = v; return this; }
+        public Builder commissioneDepositoEur(double v)       { this.commissioneDepositoEur = v; return this; }
+        public Builder spedizioneStimataEur(double v)         { this.spedizioneStimataEur = v; return this; }
+        public Builder stoccaggioEur(double v)                { this.stoccaggioEur = v; return this; }
+        public Builder fotoEur(double v)                      { this.fotoEur = v; return this; }
+        public Builder totaleCostiEur(double v)               { this.totaleCostiEur = v; return this; }
+        public Builder baseDoganaEur(double v)                { this.baseDoganaEur = v; return this; }
+        public Builder superaSogliaDogana(boolean v)          { this.superaSogliaDogana = v; return this; }
+        public Builder guadagnoNettoEur(double v)             { this.guadagnoNettoEur = v; return this; }
+        public Builder costoPerPezzoEur(double v)             { this.costoPerPezzoEur = v; return this; }
+        public Builder pesoSottoMinimo(boolean v)             { this.pesoSottoMinimo = v; return this; }
+
+        public RisultatoCalcolo build() { return new RisultatoCalcolo(this); }
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\model\TotaliSessione.java ===
+package com.zenmarket.model;
+
+/**
+ * Totali aggregati di tutti gli articoli nella sessione corrente.
+ */
+public final class TotaliSessione {
+
+    private final double totaleCostoAcquistoEur;
+    private final double totaleIvaEur;
+    private final double totaleTariffaZenmarketEur;
+    private final double totaleCommissioneDepositoEur;
+    private final double totaleSpedizioneEur;
+    private final double totaleStoccaggioEur;
+    private final double totaleFotoEur;
+    private final double totaleCostiEur;
+    private final double totaleBaseDoganaEur;
+    private final double totaleNettoVenditaEur;
+    private final double totaleGuadagnoNettoEur;
+    private final int articoliConVendita;
+    private final int articoliTotali;
+
+    private TotaliSessione(Builder b) {
+        this.totaleCostoAcquistoEur      = b.totaleCostoAcquistoEur;
+        this.totaleIvaEur                = b.totaleIvaEur;
+        this.totaleTariffaZenmarketEur   = b.totaleTariffaZenmarketEur;
+        this.totaleCommissioneDepositoEur= b.totaleCommissioneDepositoEur;
+        this.totaleSpedizioneEur         = b.totaleSpedizioneEur;
+        this.totaleStoccaggioEur         = b.totaleStoccaggioEur;
+        this.totaleFotoEur               = b.totaleFotoEur;
+        this.totaleCostiEur              = b.totaleCostiEur;
+        this.totaleBaseDoganaEur         = b.totaleBaseDoganaEur;
+        this.totaleNettoVenditaEur       = b.totaleNettoVenditaEur;
+        this.totaleGuadagnoNettoEur      = b.totaleGuadagnoNettoEur;
+        this.articoliConVendita          = b.articoliConVendita;
+        this.articoliTotali              = b.articoliTotali;
+    }
+
+    public double getTotaleCostoAcquistoEur()       { return totaleCostoAcquistoEur; }
+    public double getTotaleIvaEur()                  { return totaleIvaEur; }
+    public double getTotaleTariffaZenmarketEur()     { return totaleTariffaZenmarketEur; }
+    public double getTotaleCommissioneDepositoEur()  { return totaleCommissioneDepositoEur; }
+    public double getTotaleSpedizioneEur()           { return totaleSpedizioneEur; }
+    public double getTotaleStoccaggioEur()           { return totaleStoccaggioEur; }
+    public double getTotaleFotoEur()                 { return totaleFotoEur; }
+    public double getTotaleCostiEur()                { return totaleCostiEur; }
+    public double getTotaleBaseDoganaEur()           { return totaleBaseDoganaEur; }
+    public double getTotaleNettoVenditaEur()         { return totaleNettoVenditaEur; }
+    public double getTotaleGuadagnoNettoEur()        { return totaleGuadagnoNettoEur; }
+    public int getArticoliConVendita()               { return articoliConVendita; }
+    public int getArticoliTotali()                   { return articoliTotali; }
+
+    public static final class Builder {
+        private double totaleCostoAcquistoEur;
+        private double totaleIvaEur;
+        private double totaleTariffaZenmarketEur;
+        private double totaleCommissioneDepositoEur;
+        private double totaleSpedizioneEur;
+        private double totaleStoccaggioEur;
+        private double totaleFotoEur;
+        private double totaleCostiEur;
+        private double totaleBaseDoganaEur;
+        private double totaleNettoVenditaEur;
+        private double totaleGuadagnoNettoEur;
+        private int articoliConVendita;
+        private int articoliTotali;
+
+        public Builder costoAcquisto(double v)     { this.totaleCostoAcquistoEur = v; return this; }
+        public Builder iva(double v)               { this.totaleIvaEur = v; return this; }
+        public Builder zenmarket(double v)         { this.totaleTariffaZenmarketEur = v; return this; }
+        public Builder deposito(double v)          { this.totaleCommissioneDepositoEur = v; return this; }
+        public Builder spedizione(double v)        { this.totaleSpedizioneEur = v; return this; }
+        public Builder stoccaggio(double v)        { this.totaleStoccaggioEur = v; return this; }
+        public Builder foto(double v)              { this.totaleFotoEur = v; return this; }
+        public Builder costiTotali(double v)       { this.totaleCostiEur = v; return this; }
+        public Builder baseDogana(double v)        { this.totaleBaseDoganaEur = v; return this; }
+        public Builder nettoVendita(double v)      { this.totaleNettoVenditaEur = v; return this; }
+        public Builder guadagno(double v)          { this.totaleGuadagnoNettoEur = v; return this; }
+        public Builder articoliConVendita(int v)   { this.articoliConVendita = v; return this; }
+        public Builder articoliTotali(int v)       { this.articoliTotali = v; return this; }
+
+        public TotaliSessione build()              { return new TotaliSessione(this); }
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\service\CalcolatoreService.java ===
+package com.zenmarket.service;
+
+import com.zenmarket.config.AppConfig;
+import com.zenmarket.model.Articolo;
+import com.zenmarket.model.RisultatoCalcolo;
+import com.zenmarket.model.TotaliSessione;
+
+import java.util.List;
+
+/**
+ * Servizio di calcolo puro: nessuna dipendenza dalla UI.
+ * Tutta la logica economica è qui, testabile in isolamento.
+ *
+ * Logica basata su:
+ *   - https://zenmarket.jp/it/fees.aspx
+ *   - https://zenmarket.jp/it/payment.aspx
+ *   - File Excel originale dell'utente
+ */
+public class CalcolatoreService {
+
+    /**
+     * Calcola tutti i costi e il guadagno per un singolo articolo.
+     *
+     * @param articolo    l'articolo da calcolare
+     * @param cambioJpyEur tasso di cambio corrente JPY → EUR
+     * @return un oggetto immutabile con tutti i valori calcolati
+     */
+    public RisultatoCalcolo calcola(Articolo articolo, double cambioJpyEur) {
+        // ── 1. IVA italiana sul costo di acquisto ──────────────────────────
+        double ivaEur = articolo.getCostoAcquistoEur() * AppConfig.IVA_ITALIANA;
+
+        // ── 2. Tariffa servizio ZenMarket ─────────────────────────────────
+        //   La tariffa è PER ARTICOLO (non per lotto): se compri 3 pezzi
+        //   paghi 3 × tariffa. Fonte: "per articolo, indipendentemente dal
+        //   numero di pezzi identici acquistati" → in realtà ZenMarket conta
+        //   ogni riga/ordine come UN articolo, non ogni pezzo fisico.
+        //   Il file Excel usa una tariffa fissa per riga → manteniamo lo stesso.
+        double tariffaZenmarketEur = articolo.getMarketplace().getTariffaJpy() * cambioJpyEur;
+
+        // ── 3. Spedizione EMS stimata ──────────────────────────────────────
+        double pesoGrammi = articolo.getPesoTotaleGrammi();
+        boolean pesoSottoMinimo = pesoGrammi < AppConfig.PESO_MINIMO_EMS_G;
+        double spedizioneEur = pesoSottoMinimo ? 0.0 : calcolaSpedizione(pesoGrammi);
+
+        // ── 4. Stoccaggio extra (giorni oltre il 60° gratuito) ─────────────
+        double stoccaggioEur = 0.0;
+        if (articolo.getGiorniStoccaggio() > 0) {
+            stoccaggioEur = articolo.getGiorniStoccaggio()
+                    * AppConfig.COSTO_STOCCAGGIO_GIORNALIERO_JPY
+                    * cambioJpyEur;
+        }
+
+        // ── 5. Foto articolo (opzionale) ───────────────────────────────────
+        double fotoEur = 0.0;
+        if (articolo.isFotoRichiesta()) {
+            fotoEur = AppConfig.SERVIZIO_FOTO_PER_ARTICOLO_JPY * cambioJpyEur;
+        }
+
+        // ── 6. Commissione deposito fondi (3,5%) ───────────────────────────
+        //   Si applica sul totale che devi depositare su ZenMarket:
+        //   costo articolo + tariffa ZenMarket + spedizione domestica Giappone
+        //   (quest'ultima non è modellata qui, usiamo i costi noti)
+        //   Il file Excel originale usava 5% come "costi deposito" calcolato
+        //   sulla somma dei costi → manteniamo entrambe le logiche.
+        //   La pagina pagamenti indica 3,5% sulla ricarica effettuata.
+        //   Usiamo la logica del file Excel (5% sui sub-totali) per compatibilità
+        //   con i dati storici, configurabile in AppConfig.
+        double baseDeposito = articolo.getCostoAcquistoEur() + ivaEur
+                + tariffaZenmarketEur + spedizioneEur;
+        double commissioneDepositoEur = baseDeposito * AppConfig.COMMISSIONE_DEPOSITO;
+
+        // ── 7. Totale costi ────────────────────────────────────────────────
+        double totaleCostiEur = articolo.getCostoAcquistoEur()
+                + ivaEur
+                + tariffaZenmarketEur
+                + spedizioneEur
+                + commissioneDepositoEur
+                + stoccaggioEur
+                + fotoEur;
+
+        // ── 8. Base doganale ───────────────────────────────────────────────
+        //   Valore dichiarato = costo acquisto + IVA + spedizione
+        //   Se supera 150€ → potenziali dazi
+        double baseDoganaEur = articolo.getCostoAcquistoEur() + ivaEur + spedizioneEur;
+        boolean superaSoglia = baseDoganaEur > AppConfig.SOGLIA_DOGANALE_EUR;
+
+        // ── 9. Guadagno netto ─────────────────────────────────────────────
+        double guadagnoEur = 0.0;
+        if (articolo.getNettoVenditaEur() > 0) {
+            guadagnoEur = articolo.getNettoVenditaEur() - totaleCostiEur;
+        }
+
+        // ── 10. Costo per singolo pezzo ───────────────────────────────────
+        double costoPerPezzoEur = articolo.getQuantita() > 0
+                ? totaleCostiEur / articolo.getQuantita()
+                : totaleCostiEur;
+
+        return new RisultatoCalcolo.Builder()
+                .articolo(articolo)
+                .cambioJpyEur(cambioJpyEur)
+                .ivaEur(ivaEur)
+                .tariffaZenmarketEur(tariffaZenmarketEur)
+                .commissioneDepositoEur(commissioneDepositoEur)
+                .spedizioneStimataEur(spedizioneEur)
+                .stoccaggioEur(stoccaggioEur)
+                .fotoEur(fotoEur)
+                .totaleCostiEur(totaleCostiEur)
+                .baseDoganaEur(baseDoganaEur)
+                .superaSogliaDogana(superaSoglia)
+                .guadagnoNettoEur(guadagnoEur)
+                .costoPerPezzoEur(costoPerPezzoEur)
+                .pesoSottoMinimo(pesoSottoMinimo)
+                .build();
+    }
+
+    /**
+     * Calcola i totali aggregati di una lista di risultati.
+     */
+    public TotaliSessione calcolaTotali(List<RisultatoCalcolo> risultati) {
+        double costoAcq = 0, iva = 0, zen = 0, dep = 0, sped = 0,
+               stocc = 0, foto = 0, totCosti = 0, dogana = 0,
+               vendita = 0, guadagno = 0;
+        int conVendita = 0;
+
+        for (RisultatoCalcolo r : risultati) {
+            costoAcq  += r.getArticolo().getCostoAcquistoEur();
+            iva       += r.getIvaEur();
+            zen       += r.getTariffaZenmarketEur();
+            dep       += r.getCommissioneDepositoEur();
+            sped      += r.getSpedizioneStimataEur();
+            stocc     += r.getStoccaggioEur();
+            foto      += r.getFotoEur();
+            totCosti  += r.getTotaleCostiEur();
+            dogana    += r.getBaseDoganaEur();
+            if (r.hasVendita()) {
+                vendita  += r.getArticolo().getNettoVenditaEur();
+                guadagno += r.getGuadagnoNettoEur();
+                conVendita++;
+            }
+        }
+
+        return new TotaliSessione.Builder()
+                .costoAcquisto(costoAcq)
+                .iva(iva)
+                .zenmarket(zen)
+                .deposito(dep)
+                .spedizione(sped)
+                .stoccaggio(stocc)
+                .foto(foto)
+                .costiTotali(totCosti)
+                .baseDogana(dogana)
+                .nettoVendita(vendita)
+                .guadagno(guadagno)
+                .articoliConVendita(conVendita)
+                .articoliTotali(risultati.size())
+                .build();
+    }
+
+    /**
+     * Determina la tariffa EMS in base al peso totale del pacco.
+     * Tabella prezzi verso Italia.
+     * Restituisce 0.0 se il peso supera il massimo tabulato (gestione manuale).
+     */
+    public double calcolaSpedizione(double pesoGrammi) {
+        for (double[] fascia : AppConfig.TARIFFE_EMS) {
+            if (pesoGrammi <= fascia[0]) {
+                return fascia[1];
+            }
+        }
+        // Oltre 8kg: restituisce l'ultima tariffa nota come stima minima
+        return AppConfig.TARIFFE_EMS[AppConfig.TARIFFE_EMS.length - 1][1];
+    }
+
+    /**
+     * Converte un importo da JPY a EUR usando il cambio fornito.
+     */
+    public double jpyToEur(double jpy, double cambio) {
+        return jpy * cambio;
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\service\SessioneService.java ===
+package com.zenmarket.service;
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.reflect.TypeToken;
+import com.zenmarket.model.Articolo;
+
+import java.io.*;
+import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Gestisce la lista di articoli della sessione corrente
+ * e il salvataggio/caricamento su file JSON.
+ */
+public class SessioneService {
+
+    private final List<Articolo> articoli = new ArrayList<>();
+    private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+
+    // ─── CRUD articoli ─────────────────────────────────────────────────────
+
+    public void aggiungi(Articolo articolo) {
+        articoli.add(articolo);
+    }
+
+    public void rimuovi(int indice) {
+        if (indice >= 0 && indice < articoli.size()) {
+            articoli.remove(indice);
+        }
+    }
+
+    public void aggiorna(int indice, Articolo articolo) {
+        if (indice >= 0 && indice < articoli.size()) {
+            articoli.set(indice, articolo);
+        }
+    }
+
+    public void sposta(int da, int a) {
+        if (da >= 0 && da < articoli.size() && a >= 0 && a < articoli.size()) {
+            Collections.swap(articoli, da, a);
+        }
+    }
+
+    public Articolo get(int indice) {
+        return articoli.get(indice);
+    }
+
+    public List<Articolo> getArticoli() {
+        return Collections.unmodifiableList(articoli);
+    }
+
+    public int size() { return articoli.size(); }
+
+    public void svuota() { articoli.clear(); }
+
+    // ─── Persistenza JSON ──────────────────────────────────────────────────
+
+    public void salva(File file) throws IOException {
+        String json = gson.toJson(articoli);
+        Files.writeString(file.toPath(), json, StandardCharsets.UTF_8);
+    }
+
+    public void carica(File file) throws IOException {
+        String json = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+        Type listType = new TypeToken<List<Articolo>>(){}.getType();
+        List<Articolo> caricati = gson.fromJson(json, listType);
+        articoli.clear();
+        if (caricati != null) {
+            articoli.addAll(caricati);
+        }
+    }
+
+    // ─── Dati di esempio (pre-caricati dal file Excel) ─────────────────────
+
+    public void caricaEsempi() {
+        articoli.clear();
+        articoli.add(new Articolo("Ichiban Whitebeard's Pirates",
+                com.zenmarket.model.Marketplace.MERCARI_PRIVATI, 3, 3500, 81, 230));
+        articoli.add(new Articolo("Ichiban Whitebeard's Pirates (set 2)",
+                com.zenmarket.model.Marketplace.MERCARI_PRIVATI, 4, 4000, 122, 290));
+        articoli.add(new Articolo("Lucci e Luffy",
+                com.zenmarket.model.Marketplace.MERCARI_PRIVATI, 12, 4000, 75, 240));
+        articoli.add(new Articolo("3 set Ammiragli",
+                com.zenmarket.model.Marketplace.MERCARI_PRIVATI, 3, 3500, 106, 300));
+        articoli.add(new Articolo("4-set Ammiragli",
+                com.zenmarket.model.Marketplace.MERCARI_PRIVATI, 4, 4000, 154, 405));
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\ui\ArticoloDialog.java ===
+package com.zenmarket.ui;
+
+import com.zenmarket.model.Articolo;
+import com.zenmarket.model.Marketplace;
+
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
+
+/**
+ * Dialogo per aggiungere o modificare un articolo.
+ * Usato sia per l'inserimento nuovo che per la modifica di una riga esistente.
+ */
+public class ArticoloDialog extends JDialog {
+
+    private boolean confermato = false;
+
+    private final JTextField campoNome = new JTextField(24);
+    private final JComboBox<Marketplace> campoMarketplace = new JComboBox<>(Marketplace.values());
+    private final JSpinner campoQta = new JSpinner(new SpinnerNumberModel(1, 1, 9999, 1));
+    private final JSpinner campoPeso = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 50000.0, 100.0));
+    private final JFormattedTextField campoCosto = new JFormattedTextField();
+    private final JFormattedTextField campoVendita = new JFormattedTextField();
+    private final JSpinner campoGiorniStoccaggio = new JSpinner(new SpinnerNumberModel(0, 0, 365, 1));
+    private final JCheckBox campoFoto = new JCheckBox("Richiedi foto articolo (+500 ¥)");
+    private final JTextArea campoNote = new JTextArea(3, 24);
+
+    public ArticoloDialog(Frame owner, String titolo, Articolo articoloDaModificare) {
+        super(owner, titolo, true);
+        buildUI();
+        if (articoloDaModificare != null) {
+            popolaCampi(articoloDaModificare);
+        }
+        pack();
+        setMinimumSize(new Dimension(460, 0));
+        setLocationRelativeTo(owner);
+    }
+
+    private void buildUI() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(new EmptyBorder(16, 20, 8, 20));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 4, 4, 4);
+        gbc.anchor = GridBagConstraints.WEST;
+
+        int row = 0;
+
+        // Nome prodotto
+        aggiungiRiga(panel, gbc, row++, "Nome prodotto *", campoNome);
+
+        // Marketplace
+        aggiungiRiga(panel, gbc, row++, "Marketplace", campoMarketplace);
+
+        // Info tariffa dinamica
+        JLabel labelTariffa = new JLabel();
+        labelTariffa.setForeground(new Color(130, 90, 200));
+        labelTariffa.setFont(labelTariffa.getFont().deriveFont(Font.ITALIC, 11f));
+        campoMarketplace.addActionListener(e -> {
+            Marketplace m = (Marketplace) campoMarketplace.getSelectedItem();
+            if (m != null) {
+                labelTariffa.setText("  → Commissione ZenMarket: " + m.getTariffaJpy() + " ¥");
+            }
+        });
+        campoMarketplace.setSelectedIndex(0);
+        gbc.gridx = 1; gbc.gridy = row++;
+        panel.add(labelTariffa, gbc);
+
+        // Quantità
+        aggiungiRiga(panel, gbc, row++, "N° articoli (pezzi)", campoQta);
+
+        // Peso
+        campoPeso.setEditor(new JSpinner.NumberEditor(campoPeso, "#.# g"));
+        aggiungiRiga(panel, gbc, row++, "Peso totale pacco (g)", campoPeso);
+
+        // Costo acquisto
+        campoCosto.setColumns(10);
+        campoCosto.setValue(0.0);
+        aggiungiRiga(panel, gbc, row++, "Costo acquisto (€) *", campoCosto);
+
+        JLabel notaCosto = new JLabel("  Prezzo pagato al venditore, già convertito in €");
+        notaCosto.setForeground(Color.GRAY);
+        notaCosto.setFont(notaCosto.getFont().deriveFont(10f));
+        gbc.gridx = 1; gbc.gridy = row++;
+        panel.add(notaCosto, gbc);
+
+        // Netto vendita
+        campoVendita.setColumns(10);
+        campoVendita.setValue(0.0);
+        aggiungiRiga(panel, gbc, row++, "Netto vendita previsto (€)", campoVendita);
+
+        JLabel notaVendita = new JLabel("  Lascia 0 se non ancora determinato");
+        notaVendita.setForeground(Color.GRAY);
+        notaVendita.setFont(notaVendita.getFont().deriveFont(10f));
+        gbc.gridx = 1; gbc.gridy = row++;
+        panel.add(notaVendita, gbc);
+
+        // Stoccaggio extra
+        aggiungiRiga(panel, gbc, row++, "Giorni stoccaggio extra (>60 giorni free)", campoGiorniStoccaggio);
+
+        // Foto
+        gbc.gridx = 1; gbc.gridy = row++;
+        panel.add(campoFoto, gbc);
+
+        // Note
+        campoNote.setLineWrap(true);
+        campoNote.setWrapStyleWord(true);
+        campoNote.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY));
+        aggiungiRiga(panel, gbc, row++, "Note", new JScrollPane(campoNote));
+
+        // Pulsanti
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 8));
+        JButton btnOk = new JButton("Aggiungi / Salva");
+        btnOk.setBackground(new Color(70, 130, 180));
+        btnOk.setForeground(Color.WHITE);
+        JButton btnCancel = new JButton("Annulla");
+
+        btnOk.addActionListener(e -> {
+            if (valida()) {
+                confermato = true;
+                dispose();
+            }
+        });
+        btnCancel.addActionListener(e -> dispose());
+
+        btnPanel.add(btnCancel);
+        btnPanel.add(btnOk);
+
+        setLayout(new BorderLayout());
+        add(panel, BorderLayout.CENTER);
+        add(btnPanel, BorderLayout.SOUTH);
+        getRootPane().setDefaultButton(btnOk);
+    }
+
+    private void aggiungiRiga(JPanel panel, GridBagConstraints gbc, int row, String label, Component comp) {
+        gbc.gridx = 0; gbc.gridy = row; gbc.weightx = 0;
+        panel.add(new JLabel(label + ": "), gbc);
+        gbc.gridx = 1; gbc.weightx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(comp, gbc);
+        gbc.fill = GridBagConstraints.NONE;
+    }
+
+    private boolean valida() {
+        if (campoNome.getText().isBlank()) {
+            JOptionPane.showMessageDialog(this, "Inserisci il nome del prodotto.", "Errore", JOptionPane.WARNING_MESSAGE);
+            campoNome.requestFocus();
+            return false;
+        }
+        try {
+            double costo = Double.parseDouble(campoCosto.getText().replace(',', '.').trim());
+            if (costo <= 0) throw new NumberFormatException();
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(this, "Inserisci un costo di acquisto valido (>0).", "Errore", JOptionPane.WARNING_MESSAGE);
+            campoCosto.requestFocus();
+            return false;
+        }
+        return true;
+    }
+
+    private void popolaCampi(Articolo a) {
+        campoNome.setText(a.getNome());
+        campoMarketplace.setSelectedItem(a.getMarketplace());
+        campoQta.setValue(a.getQuantita());
+        campoPeso.setValue(a.getPesoTotaleGrammi());
+        campoCosto.setValue(a.getCostoAcquistoEur());
+        campoVendita.setValue(a.getNettoVenditaEur());
+        campoGiorniStoccaggio.setValue(a.getGiorniStoccaggio());
+        campoFoto.setSelected(a.isFotoRichiesta());
+        campoNote.setText(a.getNote() != null ? a.getNote() : "");
+    }
+
+    /** Restituisce un nuovo Articolo con i valori inseriti. Chiamare solo se {@link #isConfermato()} == true */
+    public Articolo getArticolo() {
+        Articolo a = new Articolo();
+        a.setNome(campoNome.getText().trim());
+        a.setMarketplace((Marketplace) campoMarketplace.getSelectedItem());
+        a.setQuantita((Integer) campoQta.getValue());
+        a.setPesoTotaleGrammi(((Number) campoPeso.getValue()).doubleValue());
+        try {
+            a.setCostoAcquistoEur(Double.parseDouble(campoCosto.getText().replace(',', '.').trim()));
+        } catch (NumberFormatException ex) { a.setCostoAcquistoEur(0); }
+        try {
+            a.setNettoVenditaEur(Double.parseDouble(campoVendita.getText().replace(',', '.').trim()));
+        } catch (NumberFormatException ex) { a.setNettoVenditaEur(0); }
+        a.setGiorniStoccaggio((Integer) campoGiorniStoccaggio.getValue());
+        a.setFotoRichiesta(campoFoto.isSelected());
+        a.setNote(campoNote.getText().trim());
+        return a;
+    }
+
+    public boolean isConfermato() { return confermato; }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\ui\ArticoloTableModel.java ===
+package com.zenmarket.ui;
+
+import com.zenmarket.model.RisultatoCalcolo;
+import com.zenmarket.util.FormatUtils;
+
+import javax.swing.table.AbstractTableModel;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * TableModel per la tabella principale degli articoli.
+ * Separa la logica di presentazione dalla logica di calcolo.
+ */
+public class ArticoloTableModel extends AbstractTableModel {
+
+    public enum Colonna {
+        NOME("Prodotto"),
+        MARKETPLACE("Marketplace"),
+        QTA("N°"),
+        PESO("Peso (g)"),
+        COSTO_ACQ("Costo Acq."),
+        IVA("IVA 22%"),
+        ZENMARKET("ZenMarket"),
+        SPEDIZIONE("Spedizione"),
+        DEPOSITO("Deposito 3,5%"),
+        STOCCAGGIO("Stoccaggio"),
+        TOT_COSTI("Tot. Costi"),
+        BASE_DOGANA("Base Dogana"),
+        NETTO_VENDITA("Netto Vendita"),
+        GUADAGNO("Guadagno"),
+        COSTO_PZ("€/pz");
+
+        private final String header;
+        Colonna(String header) { this.header = header; }
+        public String getHeader() { return header; }
+    }
+
+    private final List<RisultatoCalcolo> righe = new ArrayList<>();
+
+    public void setRighe(List<RisultatoCalcolo> nuoveRighe) {
+        righe.clear();
+        righe.addAll(nuoveRighe);
+        fireTableDataChanged();
+    }
+
+    public RisultatoCalcolo getRiga(int rowIndex) {
+        return righe.get(rowIndex);
+    }
+
+    @Override public int getRowCount()    { return righe.size(); }
+    @Override public int getColumnCount() { return Colonna.values().length; }
+
+    @Override
+    public String getColumnName(int col) {
+        return Colonna.values()[col].getHeader();
+    }
+
+    @Override
+    public Class<?> getColumnClass(int col) {
+        return switch (Colonna.values()[col]) {
+            case QTA -> Integer.class;
+            default  -> String.class;
+        };
+    }
+
+    @Override
+    public Object getValueAt(int row, int col) {
+        RisultatoCalcolo r = righe.get(row);
+        return switch (Colonna.values()[col]) {
+            case NOME         -> r.getArticolo().getNome();
+            case MARKETPLACE  -> r.getArticolo().getMarketplace().getLabel();
+            case QTA          -> r.getArticolo().getQuantita();
+            case PESO         -> FormatUtils.grammi(r.getArticolo().getPesoTotaleGrammi());
+            case COSTO_ACQ    -> FormatUtils.eur(r.getArticolo().getCostoAcquistoEur());
+            case IVA          -> FormatUtils.eur(r.getIvaEur());
+            case ZENMARKET    -> FormatUtils.eur(r.getTariffaZenmarketEur());
+            case SPEDIZIONE   -> r.isPesoSottoMinimo() ? "⚠ N/D" : FormatUtils.eur(r.getSpedizioneStimataEur());
+            case DEPOSITO     -> FormatUtils.eur(r.getCommissioneDepositoEur());
+            case STOCCAGGIO   -> r.getStoccaggioEur() > 0 ? FormatUtils.eur(r.getStoccaggioEur()) : "—";
+            case TOT_COSTI    -> FormatUtils.eur(r.getTotaleCostiEur());
+            case BASE_DOGANA  -> FormatUtils.eur(r.getBaseDoganaEur()) + (r.isSuperaSogliaDogana() ? " ⚠" : "");
+            case NETTO_VENDITA -> r.hasVendita() ? FormatUtils.eur(r.getArticolo().getNettoVenditaEur()) : "—";
+            case GUADAGNO     -> r.hasVendita() ? FormatUtils.guadagno(r.getGuadagnoNettoEur()) : "—";
+            case COSTO_PZ     -> FormatUtils.eur(r.getCostoPerPezzoEur());
+        };
+    }
+
+    @Override public boolean isCellEditable(int row, int col) { return false; }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\ui\MainFrame.java ===
+package com.zenmarket.ui;
+
+import com.zenmarket.config.AppConfig;
+import com.zenmarket.model.Articolo;
+import com.zenmarket.model.RisultatoCalcolo;
+import com.zenmarket.model.TotaliSessione;
+import com.zenmarket.service.CalcolatoreService;
+import com.zenmarket.service.SessioneService;
+import com.zenmarket.util.FormatUtils;
+
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.TableColumnModel;
+import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Finestra principale dell'applicazione.
+ * Coordina UI, servizi e aggiornamenti della tabella.
+ */
+public class MainFrame extends JFrame {
+
+    private final CalcolatoreService calcolatore = new CalcolatoreService();
+    private final SessioneService sessione = new SessioneService();
+
+    private final ArticoloTableModel tableModel = new ArticoloTableModel();
+    private final JTable tabella = new JTable(tableModel);
+    private final SummaryPanel summaryPanel = new SummaryPanel();
+
+    // Cambio JPY → EUR
+    private final SpinnerNumberModel cambiModel =
+            new SpinnerNumberModel(AppConfig.DEFAULT_CAMBIO_JPY_EUR, 0.001, 1.0, 0.0001);
+    private final JSpinner spinCambio = new JSpinner(cambiModel);
+
+    // Label info tariffa corrente
+    private final JLabel lblTariffaInfo = new JLabel();
+
+    public MainFrame() {
+        super("Calcolatore Zenmarket × Mercari");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setMinimumSize(new Dimension(1200, 700));
+        buildUI();
+        sessione.caricaEsempi();
+        ricalcola();
+        pack();
+        setLocationRelativeTo(null);
+    }
+
+    // ─── Costruzione UI ────────────────────────────────────────────────────
+
+    private void buildUI() {
+        JPanel root = new JPanel(new BorderLayout(0, 10));
+        root.setBorder(new EmptyBorder(14, 16, 14, 16));
+
+        root.add(buildToolbar(), BorderLayout.NORTH);
+        root.add(buildCenter(), BorderLayout.CENTER);
+        root.add(buildFooter(), BorderLayout.SOUTH);
+
+        setContentPane(root);
+        buildMenu();
+        configuraTabella();
+    }
+
+    private JPanel buildToolbar() {
+        JPanel panel = new JPanel(new BorderLayout(10, 0));
+
+        // Titolo
+        JLabel titolo = new JLabel("Calcolatore Zenmarket × Mercari");
+        titolo.setFont(titolo.getFont().deriveFont(Font.BOLD, 18f));
+        panel.add(titolo, BorderLayout.WEST);
+
+        // Cambio + pulsanti
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+
+        // Cambio JPY
+        right.add(new JLabel("¥ → € :"));
+        JSpinner.NumberEditor editor = new JSpinner.NumberEditor(spinCambio, "0.00000");
+        spinCambio.setEditor(editor);
+        spinCambio.setPreferredSize(new Dimension(100, 26));
+        spinCambio.addChangeListener(e -> ricalcola());
+        right.add(spinCambio);
+
+        lblTariffaInfo.setFont(lblTariffaInfo.getFont().deriveFont(Font.ITALIC, 11f));
+        lblTariffaInfo.setForeground(new Color(120, 120, 150));
+        right.add(lblTariffaInfo);
+
+        // Pulsanti azione
+        JButton btnAggiungi = toolbar_btn("+ Aggiungi", new Color(60, 140, 60));
+        btnAggiungi.addActionListener(e -> apriDialogAggiungi());
+
+        JButton btnModifica = toolbar_btn("✎ Modifica", new Color(70, 130, 180));
+        btnModifica.addActionListener(e -> modificaSelezionato());
+
+        JButton btnRimuovi = toolbar_btn("✕ Rimuovi", new Color(200, 60, 60));
+        btnRimuovi.addActionListener(e -> rimuoviSelezionato());
+
+        JButton btnEsempi = toolbar_btn("⟳ Esempi", new Color(120, 80, 160));
+        btnEsempi.addActionListener(e -> {
+            int r = JOptionPane.showConfirmDialog(this,
+                    "Sostituire gli articoli attuali con i dati di esempio?",
+                    "Carica esempi", JOptionPane.YES_NO_OPTION);
+            if (r == JOptionPane.YES_OPTION) {
+                sessione.caricaEsempi();
+                ricalcola();
+            }
+        });
+
+        right.add(Box.createHorizontalStrut(10));
+        right.add(btnAggiungi);
+        right.add(btnModifica);
+        right.add(btnRimuovi);
+        right.add(Box.createHorizontalStrut(4));
+        right.add(btnEsempi);
+
+        panel.add(right, BorderLayout.EAST);
+
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.add(panel, BorderLayout.CENTER);
+        wrapper.add(new JSeparator(), BorderLayout.SOUTH);
+        wrapper.setBorder(new EmptyBorder(0, 0, 10, 0));
+        return wrapper;
+    }
+
+    private JButton toolbar_btn(String text, Color bg) {
+        JButton b = new JButton(text);
+        b.setBackground(bg);
+        b.setForeground(Color.WHITE);
+        b.setFocusPainted(false);
+        return b;
+    }
+
+    private JPanel buildCenter() {
+        JPanel panel = new JPanel(new BorderLayout(0, 10));
+        panel.add(summaryPanel, BorderLayout.NORTH);
+
+        JScrollPane scroll = new JScrollPane(tabella);
+        scroll.setBorder(BorderFactory.createLineBorder(new Color(200, 200, 210)));
+        panel.add(scroll, BorderLayout.CENTER);
+
+        // Legenda
+        panel.add(buildLegenda(), BorderLayout.SOUTH);
+        return panel;
+    }
+
+    private JPanel buildLegenda() {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 16, 4));
+        p.setBorder(BorderFactory.createTitledBorder("Note"));
+        p.setBackground(new Color(248, 248, 252));
+
+        String[] voci = {
+            "⚠ Base Dogana — Se supera €150 potrebbero applicarsi dazi doganali",
+            "⚠ N/D Spedizione — Peso < 200g: contattare ZenMarket",
+            "Tariffa Mercari privati: 800 ¥/art. | Standard: 500 ¥/art. | ZenPlus: 300 ¥/art.",
+            "Deposito fondi (carta/PayPal): 3,5% | Bonifico SWIFT: ~4.500 ¥"
+        };
+        for (String v : voci) {
+            JLabel l = new JLabel(v);
+            l.setFont(l.getFont().deriveFont(10f));
+            l.setForeground(new Color(90, 90, 110));
+            p.add(l);
+        }
+        return p;
+    }
+
+    private JPanel buildFooter() {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JLabel lbl = new JLabel("Doppio click su una riga per modificarla  |  Dati fonte: zenmarket.jp/it/fees.aspx");
+        lbl.setFont(lbl.getFont().deriveFont(10f));
+        lbl.setForeground(Color.GRAY);
+        p.add(lbl);
+        return p;
+    }
+
+    private void buildMenu() {
+        JMenuBar mb = new JMenuBar();
+
+        JMenu mFile = new JMenu("File");
+        JMenuItem mNuova = new JMenuItem("Nuova sessione");
+        mNuova.addActionListener(e -> nuovaSessione());
+        JMenuItem mApri = new JMenuItem("Apri…");
+        mApri.addActionListener(e -> apriFile());
+        JMenuItem mSalva = new JMenuItem("Salva…");
+        mSalva.addActionListener(e -> salvaFile());
+        JMenuItem mEsci = new JMenuItem("Esci");
+        mEsci.addActionListener(e -> System.exit(0));
+        mFile.add(mNuova); mFile.add(mApri); mFile.add(mSalva);
+        mFile.addSeparator(); mFile.add(mEsci);
+
+        JMenu mAiuto = new JMenu("Aiuto");
+        JMenuItem mInfo = new JMenuItem("Tariffe ZenMarket");
+        mInfo.addActionListener(e -> mostraInfoTariffe());
+        mAiuto.add(mInfo);
+
+        mb.add(mFile); mb.add(mAiuto);
+        setJMenuBar(mb);
+    }
+
+    private void configuraTabella() {
+        tabella.setRowHeight(24);
+        tabella.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        tabella.getTableHeader().setReorderingAllowed(false);
+        tabella.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        tabella.setShowGrid(true);
+        tabella.setGridColor(new Color(220, 220, 230));
+
+        // Doppio click → modifica
+        tabella.addMouseListener(new MouseAdapter() {
+            @Override public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2) modificaSelezionato();
+            }
+        });
+
+        // Larghezze colonne
+        int[] widths = { 160, 160, 40, 80, 80, 70, 80, 85, 85, 75, 90, 95, 95, 90, 75 };
+        TableColumnModel cm = tabella.getColumnModel();
+        for (int i = 0; i < Math.min(widths.length, cm.getColumnCount()); i++) {
+            cm.getColumn(i).setPreferredWidth(widths[i]);
+        }
+
+        // Renderer colori
+        tabella.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value,
+                    boolean isSelected, boolean hasFocus, int row, int col) {
+                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, col);
+                if (!isSelected) {
+                    c.setBackground(row % 2 == 0 ? Color.WHITE : new Color(247, 247, 252));
+                    String txt = value != null ? value.toString() : "";
+                    ArticoloTableModel.Colonna colName = ArticoloTableModel.Colonna.values()[col];
+                    switch (colName) {
+                        case COSTO_ACQ, IVA -> c.setForeground(new Color(180, 60, 40));
+                        case TOT_COSTI     -> { c.setForeground(new Color(180, 60, 40)); setFont(getFont().deriveFont(Font.BOLD)); }
+                        case NETTO_VENDITA -> c.setForeground(new Color(160, 120, 0));
+                        case GUADAGNO      -> {
+                            if (txt.startsWith("+")) c.setForeground(new Color(0, 140, 80));
+                            else if (txt.startsWith("-")) c.setForeground(new Color(200, 40, 40));
+                            else c.setForeground(UIManager.getColor("Table.foreground"));
+                            setFont(getFont().deriveFont(Font.BOLD));
+                        }
+                        case BASE_DOGANA   -> {
+                            if (txt.contains("⚠")) c.setForeground(new Color(200, 100, 0));
+                            else c.setForeground(new Color(100, 100, 150));
+                        }
+                        case SPEDIZIONE    -> {
+                            if (txt.contains("N/D")) c.setForeground(new Color(200, 40, 40));
+                            else c.setForeground(UIManager.getColor("Table.foreground"));
+                        }
+                        default -> c.setForeground(UIManager.getColor("Table.foreground"));
+                    }
+                }
+                ((JLabel) c).setHorizontalAlignment(
+                    col <= 1 ? SwingConstants.LEFT : SwingConstants.RIGHT);
+                return c;
+            }
+        });
+    }
+
+    // ─── Logica di calcolo ─────────────────────────────────────────────────
+
+    private void ricalcola() {
+        double cambio = (double) spinCambio.getValue();
+        List<RisultatoCalcolo> risultati = new ArrayList<>();
+        for (Articolo a : sessione.getArticoli()) {
+            risultati.add(calcolatore.calcola(a, cambio));
+        }
+        tableModel.setRighe(risultati);
+
+        if (!risultati.isEmpty()) {
+            TotaliSessione totali = calcolatore.calcolaTotali(risultati);
+            summaryPanel.aggiorna(totali);
+        } else {
+            summaryPanel.reset();
+        }
+
+        // Aggiorna info cambio
+        double zenMercari = AppConfig.ZENMARKET_FEE_MERCARI_JPY * cambio;
+        lblTariffaInfo.setText(String.format(" (800¥ = %s | 500¥ = %s)",
+                FormatUtils.eur(zenMercari),
+                FormatUtils.eur(AppConfig.ZENMARKET_FEE_STANDARD_JPY * cambio)));
+    }
+
+    // ─── Azioni UI ─────────────────────────────────────────────────────────
+
+    private void apriDialogAggiungi() {
+        ArticoloDialog dialog = new ArticoloDialog(this, "Aggiungi articolo", null);
+        dialog.setVisible(true);
+        if (dialog.isConfermato()) {
+            sessione.aggiungi(dialog.getArticolo());
+            ricalcola();
+        }
+    }
+
+    private void modificaSelezionato() {
+        int idx = tabella.getSelectedRow();
+        if (idx < 0) {
+            JOptionPane.showMessageDialog(this, "Seleziona una riga da modificare.", "Nessuna selezione", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        Articolo corrente = sessione.get(idx);
+        ArticoloDialog dialog = new ArticoloDialog(this, "Modifica articolo", corrente);
+        dialog.setVisible(true);
+        if (dialog.isConfermato()) {
+            sessione.aggiorna(idx, dialog.getArticolo());
+            ricalcola();
+            tabella.setRowSelectionInterval(idx, idx);
+        }
+    }
+
+    private void rimuoviSelezionato() {
+        int idx = tabella.getSelectedRow();
+        if (idx < 0) return;
+        String nome = sessione.get(idx).getNome();
+        int r = JOptionPane.showConfirmDialog(this,
+                "Rimuovere \"" + nome + "\"?", "Conferma rimozione", JOptionPane.YES_NO_OPTION);
+        if (r == JOptionPane.YES_OPTION) {
+            sessione.rimuovi(idx);
+            ricalcola();
+        }
+    }
+
+    private void nuovaSessione() {
+        int r = JOptionPane.showConfirmDialog(this,
+                "Cancellare tutti gli articoli e iniziare una nuova sessione?",
+                "Nuova sessione", JOptionPane.YES_NO_OPTION);
+        if (r == JOptionPane.YES_OPTION) {
+            sessione.svuota();
+            ricalcola();
+        }
+    }
+
+    private void apriFile() {
+        JFileChooser fc = new JFileChooser();
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("JSON (*.json)", "json"));
+        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try {
+                sessione.carica(fc.getSelectedFile());
+                ricalcola();
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Errore apertura file:\n" + ex.getMessage(),
+                        "Errore", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void salvaFile() {
+        JFileChooser fc = new JFileChooser();
+        fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("JSON (*.json)", "json"));
+        fc.setSelectedFile(new File("sessione_zenmarket.json"));
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File f = fc.getSelectedFile();
+            if (!f.getName().endsWith(".json")) f = new File(f.getAbsolutePath() + ".json");
+            try {
+                sessione.salva(f);
+                JOptionPane.showMessageDialog(this, "Sessione salvata in:\n" + f.getAbsolutePath());
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Errore salvataggio:\n" + ex.getMessage(),
+                        "Errore", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void mostraInfoTariffe() {
+        String msg = """
+                TARIFFE ZENMARKET (aggiornate 2025)
+                ────────────────────────────────────────
+                Mercari (venditori privati): 800 ¥/articolo
+                Mercari Shops / Amazon JP / Rakuten: 500 ¥/articolo
+                ZenPlus / Negozi consigliati: 300 ¥/articolo
+                
+                COMMISSIONE DEPOSITO FONDI
+                ────────────────────────────────────────
+                Carta di credito / PayPal: 3,5%
+                Bonifico bancario SWIFT: ~4.500 ¥
+                
+                STOCCAGGIO
+                ────────────────────────────────────────
+                60 giorni GRATUITI
+                Oltre: 50 ¥/giorno per articolo
+                
+                SOGLIA DOGANALE ITALIA
+                ────────────────────────────────────────
+                > €150 → possibili dazi doganali
+                
+                Fonte: zenmarket.jp/it/fees.aspx
+                """;
+        JOptionPane.showMessageDialog(this, msg, "Info Tariffe ZenMarket",
+                JOptionPane.INFORMATION_MESSAGE);
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\ui\SummaryPanel.java ===
+package com.zenmarket.ui;
+
+import com.zenmarket.model.TotaliSessione;
+import com.zenmarket.util.FormatUtils;
+
+import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
+
+/**
+ * Pannello di riepilogo con le card dei totali in cima alla finestra.
+ */
+public class SummaryPanel extends JPanel {
+
+    private final JLabel lblTotaleCosti    = makeValueLabel(new Color(220, 80, 50));
+    private final JLabel lblNettoVendita   = makeValueLabel(new Color(200, 160, 30));
+    private final JLabel lblGuadagno       = makeValueLabel(new Color(0, 180, 100));
+    private final JLabel lblBaseDogana     = makeValueLabel(new Color(130, 130, 180));
+    private final JLabel lblNArticoli      = makeValueLabel(new Color(100, 160, 220));
+
+    public SummaryPanel() {
+        setLayout(new GridLayout(1, 5, 10, 0));
+        setBorder(new EmptyBorder(0, 0, 12, 0));
+
+        add(creaCard("TOTALE COSTI", lblTotaleCosti, new Color(220, 80, 50)));
+        add(creaCard("NETTO VENDITA", lblNettoVendita, new Color(200, 160, 30)));
+        add(creaCard("GUADAGNO NETTO", lblGuadagno, new Color(0, 180, 100)));
+        add(creaCard("BASE DOGANALE", lblBaseDogana, new Color(130, 130, 180)));
+        add(creaCard("N° ARTICOLI", lblNArticoli, new Color(100, 160, 220)));
+    }
+
+    private JPanel creaCard(String titolo, JLabel valueLabel, Color accentColor) {
+        JPanel card = new JPanel(new BorderLayout(0, 6));
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(2, 0, 0, 0, accentColor),
+                new EmptyBorder(10, 14, 12, 14)
+        ));
+        card.setBackground(UIManager.getColor("Panel.background"));
+
+        JLabel lblTitolo = new JLabel(titolo);
+        lblTitolo.setFont(lblTitolo.getFont().deriveFont(Font.BOLD, 9f));
+        lblTitolo.setForeground(UIManager.getColor("Label.disabledForeground"));
+
+        card.add(lblTitolo, BorderLayout.NORTH);
+        card.add(valueLabel, BorderLayout.CENTER);
+        return card;
+    }
+
+    private static JLabel makeValueLabel(Color color) {
+        JLabel l = new JLabel("—");
+        l.setFont(l.getFont().deriveFont(Font.BOLD, 20f));
+        l.setForeground(color);
+        return l;
+    }
+
+    public void aggiorna(TotaliSessione t) {
+        lblTotaleCosti.setText(FormatUtils.eur(t.getTotaleCostiEur()));
+        lblNettoVendita.setText(t.getArticoliConVendita() > 0
+                ? FormatUtils.eur(t.getTotaleNettoVenditaEur()) : "—");
+
+        double guad = t.getTotaleGuadagnoNettoEur();
+        lblGuadagno.setText(t.getArticoliConVendita() > 0
+                ? FormatUtils.guadagno(guad) : "—");
+        lblGuadagno.setForeground(guad >= 0 ? new Color(0, 180, 100) : new Color(210, 50, 80));
+
+        lblBaseDogana.setText(FormatUtils.eur(t.getTotaleBaseDoganaEur()));
+        lblNArticoli.setText(String.valueOf(t.getArticoliTotali()));
+    }
+
+    public void reset() {
+        lblTotaleCosti.setText("—");
+        lblNettoVendita.setText("—");
+        lblGuadagno.setText("—");
+        lblBaseDogana.setText("—");
+        lblNArticoli.setText("0");
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\main\java\com\zenmarket\util\FormatUtils.java ===
+package com.zenmarket.util;
+
+import java.text.NumberFormat;
+import java.util.Locale;
+
+/**
+ * Utility per la formattazione dei valori numerici nell'interfaccia grafica.
+ */
+public final class FormatUtils {
+
+    private static final NumberFormat EUR_FORMAT = NumberFormat.getCurrencyInstance(Locale.ITALY);
+    private static final NumberFormat NUM_FORMAT = NumberFormat.getNumberInstance(Locale.ITALY);
+
+    static {
+        NUM_FORMAT.setMinimumFractionDigits(2);
+        NUM_FORMAT.setMaximumFractionDigits(2);
+    }
+
+    private FormatUtils() {}
+
+    /** Formatta un valore come valuta EUR: "€ 12,50" */
+    public static String eur(double valore) {
+        return EUR_FORMAT.format(valore);
+    }
+
+    /** Formatta un numero con 2 decimali */
+    public static String num(double valore) {
+        return NUM_FORMAT.format(valore);
+    }
+
+    /** Formatta grammi: "3.500 g" */
+    public static String grammi(double grammi) {
+        NumberFormat nf = NumberFormat.getNumberInstance(Locale.ITALY);
+        nf.setMaximumFractionDigits(0);
+        return nf.format(grammi) + " g";
+    }
+
+    /**
+     * Formatta un guadagno con segno: "+€ 45,00" o "-€ 12,00"
+     * Il colore viene gestito dalla UI.
+     */
+    public static String guadagno(double valore) {
+        return (valore >= 0 ? "+" : "") + eur(valore);
+    }
+
+    /** Restituisce "N/D" se il valore è 0 e la flag è false */
+    public static String eurONd(double valore, boolean disponibile) {
+        return disponibile ? eur(valore) : "N/D";
+    }
+}
+// === C:\Users\GAETANO\Desktop\programmazione java\zenmarket-calculator\src\test\java\com\zenmarket\service\CalcolatoreServiceTest.java ===
+package com.zenmarket.service;
+
+import com.zenmarket.config.AppConfig;
+import com.zenmarket.model.Articolo;
+import com.zenmarket.model.Marketplace;
+import com.zenmarket.model.RisultatoCalcolo;
+import com.zenmarket.model.TotaliSessione;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class CalcolatoreServiceTest {
+
+    private CalcolatoreService service;
+    private static final double CAMBIO = 0.006; // 1 JPY = 0.006 EUR
+    private static final double DELTA  = 0.001; // tolleranza double
+
+    @BeforeEach
+    void setUp() {
+        service = new CalcolatoreService();
+    }
+
+    // ─── IVA ──────────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("IVA = 22% del costo acquisto")
+    void testIva() {
+        Articolo a = articolo(100.0, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertEquals(22.0, r.getIvaEur(), DELTA);
+    }
+
+    // ─── Tariffa ZenMarket ────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Tariffa Mercari privati = 800 JPY × cambio")
+    void testTariffaMercariPrivati() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double attesa = AppConfig.ZENMARKET_FEE_MERCARI_JPY * CAMBIO;
+        assertEquals(attesa, r.getTariffaZenmarketEur(), DELTA);
+    }
+
+    @Test
+    @DisplayName("Tariffa standard = 500 JPY × cambio")
+    void testTariffaStandard() {
+        Articolo a = articolo(100, 1000, Marketplace.AMAZON_JP, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double attesa = AppConfig.ZENMARKET_FEE_STANDARD_JPY * CAMBIO;
+        assertEquals(attesa, r.getTariffaZenmarketEur(), DELTA);
+    }
+
+    @Test
+    @DisplayName("Tariffa ZenPlus = 300 JPY × cambio")
+    void testTariffaZenPlus() {
+        Articolo a = articolo(100, 1000, Marketplace.ZENPLUS, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double attesa = AppConfig.ZENMARKET_FEE_SCONTATA_JPY * CAMBIO;
+        assertEquals(attesa, r.getTariffaZenmarketEur(), DELTA);
+    }
+
+    // ─── Spedizione EMS ───────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Peso < 200g → pesoSottoMinimo = true, spedizione = 0")
+    void testPesoSottoMinimo() {
+        Articolo a = articolo(100, 150, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertTrue(r.isPesoSottoMinimo());
+        assertEquals(0.0, r.getSpedizioneStimataEur(), DELTA);
+    }
+
+    @Test
+    @DisplayName("Peso 300g → fascia <499g = 10,30€")
+    void testSpedizione300g() {
+        double sped = service.calcolaSpedizione(300);
+        assertEquals(10.30, sped, DELTA);
+    }
+
+    @Test
+    @DisplayName("Peso 1000g → fascia <1199g = 18,00€")
+    void testSpedizione1000g() {
+        double sped = service.calcolaSpedizione(1000);
+        assertEquals(18.00, sped, DELTA);
+    }
+
+    @Test
+    @DisplayName("Peso 3000g (3kg) → fascia <3999g = 26,00€")
+    void testSpedizione3000g() {
+        double sped = service.calcolaSpedizione(3000);
+        assertEquals(26.00, sped, DELTA);
+    }
+
+    @Test
+    @DisplayName("Peso esattamente 499g → fascia <=499g = 10,30€")
+    void testSpedizioneBordo499() {
+        double sped = service.calcolaSpedizione(499);
+        assertEquals(10.30, sped, DELTA);
+    }
+
+    @Test
+    @DisplayName("Peso 500g → fascia <699g = 12,50€")
+    void testSpedizione500g() {
+        double sped = service.calcolaSpedizione(500);
+        assertEquals(12.50, sped, DELTA);
+    }
+
+    // ─── Commissione deposito ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Commissione deposito = 3,5% sulla base imponibile")
+    void testCommissioneDeposito() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        // base = costo + IVA + zenmarket + spedizione
+        double base = r.getArticolo().getCostoAcquistoEur()
+                + r.getIvaEur()
+                + r.getTariffaZenmarketEur()
+                + r.getSpedizioneStimataEur();
+        double attesa = base * AppConfig.COMMISSIONE_DEPOSITO;
+        assertEquals(attesa, r.getCommissioneDepositoEur(), DELTA);
+    }
+
+    // ─── Soglia doganale ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Base dogana > 150€ → superaSogliaDogana = true")
+    void testSogliaDoganaSuperata() {
+        Articolo a = articolo(200, 3000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertTrue(r.isSuperaSogliaDogana());
+    }
+
+    @Test
+    @DisplayName("Base dogana < 150€ → superaSogliaDogana = false")
+    void testSogliaDoganaOk() {
+        Articolo a = articolo(50, 500, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertFalse(r.isSuperaSogliaDogana());
+    }
+
+    // ─── Guadagno ─────────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Guadagno = netto vendita - totale costi")
+    void testGuadagno() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 200);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double atteso = 200.0 - r.getTotaleCostiEur();
+        assertEquals(atteso, r.getGuadagnoNettoEur(), DELTA);
+    }
+
+    @Test
+    @DisplayName("Guadagno = 0 se netto vendita non specificato")
+    void testGuadagnoSenzaVendita() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertEquals(0.0, r.getGuadagnoNettoEur(), DELTA);
+        assertFalse(r.hasVendita());
+    }
+
+    // ─── Costo per pezzo ─────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Costo/pz = totale costi / quantità")
+    void testCostoPerPezzo() {
+        Articolo a = articolo(120, 3000, Marketplace.MERCARI_PRIVATI, 4, 300);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        assertEquals(r.getTotaleCostiEur() / 4.0, r.getCostoPerPezzoEur(), DELTA);
+    }
+
+    // ─── Stoccaggio e foto ────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Stoccaggio extra 10 giorni = 10 × 50 JPY × cambio")
+    void testStoccaggio() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        a.setGiorniStoccaggio(10);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double atteso = 10 * AppConfig.COSTO_STOCCAGGIO_GIORNALIERO_JPY * CAMBIO;
+        assertEquals(atteso, r.getStoccaggioEur(), DELTA);
+    }
+
+    @Test
+    @DisplayName("Foto richiesta = 500 JPY × cambio")
+    void testFoto() {
+        Articolo a = articolo(100, 1000, Marketplace.MERCARI_PRIVATI, 1, 0);
+        a.setFotoRichiesta(true);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        double atteso = AppConfig.SERVIZIO_FOTO_PER_ARTICOLO_JPY * CAMBIO;
+        assertEquals(atteso, r.getFotoEur(), DELTA);
+    }
+
+    // ─── Totali sessione ──────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("calcolaTotali somma correttamente i costi di più articoli")
+    void testTotaliSessione() {
+        Articolo a1 = articolo(80,  2000, Marketplace.MERCARI_PRIVATI, 3, 200);
+        Articolo a2 = articolo(150, 4000, Marketplace.AMAZON_JP,       1, 350);
+        RisultatoCalcolo r1 = service.calcola(a1, CAMBIO);
+        RisultatoCalcolo r2 = service.calcola(a2, CAMBIO);
+
+        TotaliSessione t = service.calcolaTotali(List.of(r1, r2));
+
+        assertEquals(r1.getTotaleCostiEur() + r2.getTotaleCostiEur(),
+                t.getTotaleCostiEur(), DELTA);
+        assertEquals(2, t.getArticoliTotali());
+        assertEquals(2, t.getArticoliConVendita());
+    }
+
+    @Test
+    @DisplayName("Articolo senza vendita non conta nei totali di guadagno")
+    void testTotaliSenzaVendita() {
+        Articolo a1 = articolo(80,  2000, Marketplace.MERCARI_PRIVATI, 1, 200);
+        Articolo a2 = articolo(50,  1500, Marketplace.MERCARI_PRIVATI, 1, 0);   // no vendita
+        RisultatoCalcolo r1 = service.calcola(a1, CAMBIO);
+        RisultatoCalcolo r2 = service.calcola(a2, CAMBIO);
+
+        TotaliSessione t = service.calcolaTotali(List.of(r1, r2));
+        assertEquals(1, t.getArticoliConVendita());
+        assertEquals(r1.getGuadagnoNettoEur(), t.getTotaleGuadagnoNettoEur(), DELTA);
+    }
+
+    // ─── Dati Excel originali (regression test) ───────────────────────────
+
+    @Test
+    @DisplayName("Esempio dal file Excel: Ichiban Whitebeard 3 pz, 3500g, €81 → totale costi ragionevole")
+    void testEsempioExcel() {
+        Articolo a = articolo(81, 3500, Marketplace.MERCARI_PRIVATI, 3, 230);
+        RisultatoCalcolo r = service.calcola(a, CAMBIO);
+        // IVA: 81 × 0.22 = 17.82
+        assertEquals(17.82, r.getIvaEur(), DELTA);
+        // Spedizione 3500g → fascia <3999g = 26€
+        assertEquals(26.0, r.getSpedizioneStimataEur(), DELTA);
+        // Il totale costi deve essere < netto vendita (230€) per avere senso
+        assertTrue(r.getTotaleCostiEur() < 230.0,
+                "Totale costi atteso < €230, ottenuto: " + r.getTotaleCostiEur());
+        // Costo per pezzo = totaleCosti / 3
+        assertEquals(r.getTotaleCostiEur() / 3.0, r.getCostoPerPezzoEur(), DELTA);
+    }
+
+    // ─── Helper ───────────────────────────────────────────────────────────
+
+    private Articolo articolo(double costo, double peso, Marketplace mkt, int qta, double vendita) {
+        Articolo a = new Articolo();
+        a.setCostoAcquistoEur(costo);
+        a.setPesoTotaleGrammi(peso);
+        a.setMarketplace(mkt);
+        a.setQuantita(qta);
+        a.setNettoVenditaEur(vendita);
+        a.setNome("Test articolo");
+        return a;
+    }
+}
